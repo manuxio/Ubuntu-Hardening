@@ -99,14 +99,17 @@ chown "${WEB_USER}:${WEB_USER}" "$SITE_PARENT"; chmod 750 "$SITE_PARENT"
 chown -R "${WEB_USER}:${WEB_USER}" "$DOCROOT"
 find "$DOCROOT" -type d -exec chmod 750 {} +
 find "$DOCROOT" -type f -exec chmod 640 {} +
-# Runtime-writable dirs: setgid so new files inherit group www-data.
+# Runtime-writable dirs: create if absent, then setgid so new files inherit
+# group www-data. They MUST exist: the systemd sandbox (ReadWritePaths),
+# open_basedir and the AppArmor hat all reference them, and a declared-but-
+# missing path makes php-fpm fail to start (status=226/NAMESPACE). A fresh CMS
+# usually ships them; creating them here is idempotent and closes that footgun.
 for d in $WRITABLE_DIRS; do
-  if [ -d "$DOCROOT/$d" ]; then
-    find "$DOCROOT/$d" -type d -exec chmod 2770 {} +
-    find "$DOCROOT/$d" -type f -exec chmod 660 {} +
-  else
-    info "writable dir missing (skipped): $d"
-  fi
+  [ -d "$DOCROOT/$d" ] || info "creating declared writable dir: $d"
+  mkdir -p "$DOCROOT/$d"
+  chown -R "${WEB_USER}:${WEB_USER}" "$DOCROOT/$d"
+  find "$DOCROOT/$d" -type d -exec chmod 2770 {} +
+  find "$DOCROOT/$d" -type f -exec chmod 660 {} +
 done
 # configuration.php stays read-only to the runtime user.
 [ -f "$DOCROOT/configuration.php" ] && chmod 640 "$DOCROOT/configuration.php"

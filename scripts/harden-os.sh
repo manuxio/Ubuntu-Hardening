@@ -37,6 +37,21 @@ ensure_packages() {
   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}" \
     || warn "apt install failed — ensure the image pre-bakes: ${missing[*]}"
 }
+# Best-effort, per-package install for OPTIONAL tooling: a package with no
+# installation candidate (e.g. dropped from a release) must not sink the rest of
+# the batch the way a single `apt-get install a b c` transaction would.
+install_optional() {
+  DEBIAN_FRONTEND=noninteractive apt-get update -qq 2>/dev/null || true
+  local p
+  for p in "$@"; do
+    dpkg -s "$p" >/dev/null 2>&1 && continue
+    if DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$p" >/dev/null 2>&1; then
+      info "installed: $p"
+    else
+      warn "optional package unavailable, skipped: $p"
+    fi
+  done
+}
 ensure_packages nginx "php${PHP_VERSION}-fpm" "php${PHP_VERSION}-cli" \
   "php${PHP_VERSION}-mysql" "php${PHP_VERSION}-gd" "php${PHP_VERSION}-xml" \
   "php${PHP_VERSION}-mbstring" "php${PHP_VERSION}-curl" \
@@ -197,15 +212,26 @@ EOF
 
 # --- 12. OS baseline hardening (Lynis-informed) ------------------------------
 log "OS baseline: login.defs, pam_pwquality, core dumps, module blacklist, banner"
-# password aging + default umask (login.defs)
+# password aging + default umask + password hashing rounds (login.defs).
+# set_logindef removes ACTIVE directives for a key (leaving comment lines that
+# merely mention the key untouched) and rewrites exactly one — so it is both
+# idempotent and self-healing if a previous greedy sed left duplicate lines.
+set_logindef(){ # key value
+  local k="$1" v="$2" f=/etc/login.defs
+  sed -i -E "/^[[:space:]]*${k}[[:space:]]/d" "$f"
+  printf '%s\t%s\n' "$k" "$v" >> "$f"
+}
 if [ -f /etc/login.defs ]; then
   backup_once /etc/login.defs
-  sed -i -E \
-    -e 's/^#?\s*PASS_MAX_DAYS.*/PASS_MAX_DAYS\t365/' \
-    -e 's/^#?\s*PASS_MIN_DAYS.*/PASS_MIN_DAYS\t1/' \
-    -e 's/^#?\s*PASS_WARN_AGE.*/PASS_WARN_AGE\t7/' \
-    -e 's/^#?\s*UMASK.*/UMASK\t\t027/' /etc/login.defs
+  set_logindef PASS_MAX_DAYS 365
+  set_logindef PASS_MIN_DAYS 1
+  set_logindef PASS_WARN_AGE 7
+  set_logindef UMASK 027
+  set_logindef SHA_CRYPT_MIN_ROUNDS 65536   # AUTH-9230: stronger password hashing
 fi
+# umask for login shells too (Lynis checks /etc/profile, not just login.defs)
+printf '# hardening: restrictive default umask\numask 027\n' > /etc/profile.d/99-hardening-umask.sh
+chmod 644 /etc/profile.d/99-hardening-umask.sh
 # password quality (affects only NEW passwords; the package wires pam in)
 ensure_packages libpam-pwquality
 if [ -d /etc/security ]; then
@@ -228,6 +254,52 @@ cp "$CFG/modprobe-hardening.conf" /etc/modprobe.d/hardening.conf
 # legal login banners
 cp "$CFG/issue-banner" /etc/issue
 cp "$CFG/issue-banner" /etc/issue.net
+
+# --- Extended baseline: SSH, integrity/accounting tooling, compilers, nginx TLS
+# All low-risk and reversible; raises the audit posture without operational cost.
+log "OS baseline (extended): SSH hardening, integrity/accounting tools, compilers"
+
+# SSH: strong, key-only. Drop-in read FIRST (00-) so its values win over the
+# cloud-image defaults. Validate before reload; reload keeps live sessions up.
+if [ -d /etc/ssh/sshd_config.d ]; then
+  cp "$CFG/sshd-hardening.conf" /etc/ssh/sshd_config.d/00-hardening.conf
+  chmod 600 /etc/ssh/sshd_config.d/00-hardening.conf
+  if sshd -t 2>/tmp/sshd-test.err; then
+    systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+    info "sshd hardened (config valid, reloaded — existing sessions unaffected)"
+  else
+    warn "sshd -t failed; removed drop-in, NOT reloading. See /tmp/sshd-test.err"
+    rm -f /etc/ssh/sshd_config.d/00-hardening.conf
+  fi
+fi
+
+# Integrity + accounting + patch-management tooling (audit tools reward presence).
+# Best-effort per package (apt-listbugs has no candidate on some releases, etc.).
+install_optional debsums libpam-tmpdir apt-listchanges \
+                 apt-show-versions sysstat acct rkhunter
+systemctl enable --now acct 2>/dev/null || systemctl enable --now psacct 2>/dev/null || true
+if [ -f /etc/default/sysstat ]; then
+  sed -i 's/^ENABLED=.*/ENABLED="true"/' /etc/default/sysstat
+  systemctl enable --now sysstat 2>/dev/null || true
+fi
+if [ -f /etc/default/rkhunter ]; then
+  sed -i -e 's/^CRON_DAILY_RUN=.*/CRON_DAILY_RUN="true"/' \
+         -e 's/^APT_AUTOGEN=.*/APT_AUTOGEN="true"/' /etc/default/rkhunter
+fi
+command -v rkhunter >/dev/null 2>&1 && rkhunter --propupd --quiet 2>/dev/null || true
+
+# Restrict compilers to root only (no non-root code compilation on a web host).
+for p in /usr/bin/cc /usr/bin/gcc /usr/bin/g++ /usr/bin/clang /usr/bin/gcc-*; do
+  [ -e "$p" ] || continue
+  chown root:root "$p" 2>/dev/null || true
+  chmod 750 "$p" 2>/dev/null || true
+done
+
+# nginx ships TLSv1/1.1 in the default http block — pin to 1.2/1.3 in place.
+if [ -f /etc/nginx/nginx.conf ]; then
+  sed -i -E 's/^(\s*)ssl_protocols[[:space:]].*/\1ssl_protocols TLSv1.2 TLSv1.3;/' /etc/nginx/nginx.conf
+  nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null || true
+fi
 
 log "OS hardening complete. Measure with:  audit-os.sh --verify   (baseline: audit-os.sh --baseline)"
 log "Next: harden-vhost.sh per site (AppArmor in COMPLAIN — soak, then enforce)."

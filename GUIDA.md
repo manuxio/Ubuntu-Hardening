@@ -115,7 +115,7 @@ sudo bash scripts/audit-os.sh --baseline
 #  ... applica l'hardening (5.1 -> 5.5) ...
 
 # VERIFY (dopo) — rimisura e mostra il delta
-sudo bash scripts/audit-os.sh --verify            # es. reale: 65 -> 73
+sudo bash scripts/audit-os.sh --verify            # es. reale: 65 -> 84
 
 # CVE dei pacchetti (asse "sei patchato?", diverso dall'hardening di config)
 sudo bash scripts/scan-cve.sh                      # Trivy: HIGH/CRITICAL

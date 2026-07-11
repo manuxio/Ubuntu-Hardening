@@ -7,8 +7,10 @@ read, write, or execute across the others, and post-exploitation moves (dropping
 a webshell, pulling a payload, spawning a shell, phoning home) are prevented,
 contained, and detected.
 
-Verified end-to-end on a real Ubuntu 22.04 VM (two isolated sites, AppArmor
-**enforce**) and in ephemeral Docker.
+Verified end-to-end on a real Ubuntu 22.04 VM: two isolated sites under AppArmor
+**enforce**, a 32/32-green cross-site isolation matrix (`test/tier2-e2e.sh`), and
+a Lynis hardening index raised **65 → 84** — plus config/filesystem/PHP checks in
+ephemeral Docker.
 
 > 📖 **Full operator guide (Italian):** [`GUIDA.md`](GUIDA.md) ·
 > 🧪 **Complete walkthrough with real outputs:** [`example.md`](example.md)
@@ -68,7 +70,7 @@ Measure it (optional but recommended — run `audit-os.sh --baseline` *before* s
 to compare):
 
 ```bash
-sudo bash scripts/audit-os.sh --verify     # Lynis hardening index (e.g. 65 -> 73)
+sudo bash scripts/audit-os.sh --verify     # Lynis hardening index (measured 65 -> 84)
 sudo bash scripts/scan-cve.sh              # Trivy: CVEs in installed packages
 sudo bash scripts/audit-cis.sh             # OpenSCAP: CIS benchmark score + HTML report
 ```
@@ -99,7 +101,17 @@ powershell -ExecutionPolicy Bypass -File test\run-tests.ps1
 ```
 
 Docker can't exercise kernel-layer controls (AppArmor enforce, auditd, ufw,
-systemd) — those are validated on a real VM. See [`PLAN.md`](PLAN.md) §Test.
+systemd) — those are validated on a real VM with the **Tier-2 end-to-end
+harness**, which provisions two sites, enforces AppArmor, adds TLS, then proves
+cross-site isolation (site1's pool trying to read/write/exec into site2 and the
+host — every attempt denied, both directions):
+
+```bash
+# on a throwaway VM that already has scripts/harden-os.sh applied, run as root:
+sudo bash test/tier2-e2e.sh        # 32 assertions incl. the isolation matrix
+```
+
+See [`PLAN.md`](PLAN.md) §Test.
 
 ## Scripts
 
