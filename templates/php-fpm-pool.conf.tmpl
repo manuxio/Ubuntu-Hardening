@@ -56,6 +56,13 @@ php_admin_value[disable_functions] = exec,passthru,shell_exec,system,proc_open,p
 php_admin_flag[allow_url_include] = off
 php_admin_flag[allow_url_fopen]   = off
 
+; --- Script resolution -------------------------------------------------------
+; NEVER run the "nearest existing file" when the requested SCRIPT_FILENAME does
+; not exist on disk. This is the php-side half of the classic nginx+FPM fix:
+; it blocks /uploads/evil.jpg/x.php (PATH_INFO) from executing evil.jpg, and
+; pairs with nginx's "try_files $uri =404;" (script-must-exist).
+php_admin_value[cgi.fix_pathinfo] = 0
+
 ; --- Information leakage ------------------------------------------------------
 php_admin_flag[expose_php]     = off
 php_admin_flag[display_errors] = off

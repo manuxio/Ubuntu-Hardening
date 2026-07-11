@@ -9,27 +9,38 @@ include /etc/nginx/snippets/security-headers.conf;
 fastcgi_hide_header X-Powered-By;
 client_max_body_size @@CLIENT_MAX_BODY@@;
 
-# Never serve hidden files, VCS metadata, or the config/secrets.
-location ~ /\.                   { deny all; }
-location ~* configuration\.php$  { deny all; }
+# Never serve hidden files, VCS metadata, or the config/secrets. The (/|$)
+# suffix also covers PATH_INFO variants (e.g. /configuration.php/x).
+location ~ /\.                        { deny all; }
+location ~* configuration\.php(/|$)  { deny all; }
 location ~* \.(?:ini|log|sh|bak|sql|twig)$ { deny all; }
 
 # Kill PHP execution in writable/upload dirs (nginx equivalent of SetHandler
-# None). MUST precede the generic \.php$ location.
-location ~* ^/(@@WRITABLE_REGEX@@)/.*\.php$ { deny all; }
+# None). MUST precede the generic PHP location, and cover PATH_INFO too so a
+# /images/shell.php/x request can't slip through.
+location ~* ^/(@@WRITABLE_REGEX@@)/.*\.php(/|$) { deny all; }
 
 # Front controller.
 location / { try_files $uri $uri/ /index.php?$args; }
 
-# PHP: only real, existing .php files reach FPM.
-location ~ \.php$ {
-    try_files $uri =404;                        # script-must-exist
-    fastcgi_split_path_info ^(.+\.php)(/.+)$;
+# PHP handler — best-practice hardening so ONLY a real, existing .php script
+# ever reaches FPM (nginx ticket #321 / the classic path_info fixes):
+#   * [^/]\.php(/|$)  matches .php as a path component (PATH_INFO aware);
+#   * NON-GREEDY split makes the SCRIPT the FIRST .php  ->  /a.jpg/b.php cannot
+#     run a.jpg, and the CVE-2019-11043 style path tricks don't resolve;
+#   * try_files on $fastcgi_script_name (the SCRIPT, not the full URI) => the
+#     file MUST exist on disk, so non-existent scripts return 404, never execute;
+#   * PATH_INFO is saved first because try_files clears $fastcgi_path_info.
+# Pairs with the pool's  cgi.fix_pathinfo=0  and  security.limit_extensions=.php.
+location ~ [^/]\.php(/|$) {
+    fastcgi_split_path_info ^(.+?\.php)(/.*)$;
+    set $saved_path_info $fastcgi_path_info;
+    try_files $fastcgi_script_name =404;
     fastcgi_pass unix:@@SOCKET@@;
     fastcgi_index index.php;
     include fastcgi_params;
     fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
-    fastcgi_param PATH_INFO $fastcgi_path_info;
+    fastcgi_param PATH_INFO $saved_path_info;
     fastcgi_param HTTPS $https if_not_empty;    # let PHP know when it's on TLS
     fastcgi_read_timeout 120s;
 }
