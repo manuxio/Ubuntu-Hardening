@@ -516,8 +516,8 @@ if [ "${1:-}" = "--check" ]; then
   echo "  repo root  : $REPO"
   miss=0
   for s in harden-os.sh harden-vhost.sh enforce-vhost.sh setup-tls.sh tune-vhost.sh \
-           refresh-vhost.sh destroy-vhost.sh deploy-test.sh show-aa-denials.sh \
-           add-aa-permit.sh audit-os.sh scan-cve.sh audit-cis.sh; do
+           refresh-vhost.sh destroy-vhost.sh deploy-test.sh probe-vhost.sh \
+           show-aa-denials.sh add-aa-permit.sh audit-os.sh scan-cve.sh audit-cis.sh; do
     if [ -f "$SCRIPTS/$s" ]; then echo "  [ok]   scripts/$s"; else echo "  [MISS] scripts/$s"; miss=$((miss+1)); fi
   done
   if [ -f "$TESTDIR/tier2-e2e.sh" ]; then echo "  [ok]   test/tier2-e2e.sh"; else echo "  [MISS] test/tier2-e2e.sh"; miss=$((miss+1)); fi
@@ -540,6 +540,7 @@ while true; do
     enforce  "Enforce AppArmor di un sito (soak->enforce)" \
     tls      "HTTPS / TLS di un sito" \
     deploytest "Deploy pagina di test PHP (verifica un sito)" \
+    probe    "Verifica isolamento di un sito (usa siti esistenti)" \
     denials  "Mostra i denial AppArmor di un sito" \
     destroy  "Distruggi un sito (rimuove config, NON i dati)" \
     e2e      "Test end-to-end (ATTENZIONE: crea site1/site2!)" \
@@ -557,6 +558,7 @@ while true; do
     modify)   action_modify ;;
     refresh)  action_site "$SCRIPTS/refresh-vhost.sh" ;;
     deploytest) action_site "$SCRIPTS/deploy-test.sh" ;;
+    probe)    action_site "$SCRIPTS/probe-vhost.sh" ;;
     denials)  action_site "$SCRIPTS/show-aa-denials.sh" ;;
     destroy)  action_site "$SCRIPTS/destroy-vhost.sh" ;;
     e2e)      if ui_yesno "ATTENZIONE: il test end-to-end CREA i siti di prova site1 e site2,
