@@ -75,7 +75,11 @@ health_check() {
   if [ -n "$URL" ]; then
     code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "$URL" 2>/dev/null)" || true
   elif [ -n "$SERVER_NAME" ]; then
-    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 --resolve "${SERVER_NAME}:80:127.0.0.1" "http://${SERVER_NAME}/" 2>/dev/null)" || true
+    # SERVER_NAME may hold several space-separated domains (primary + aliases);
+    # the health check must curl only the FIRST, or --resolve/the URL get a space
+    # and curl returns 000 (looks like a broken worker when it isn't).
+    local primary; primary="$(awk '{print $1}' <<< "$SERVER_NAME")"
+    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 --resolve "${primary}:80:127.0.0.1" "http://${primary}/" 2>/dev/null)" || true
   else
     code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 http://127.0.0.1/ 2>/dev/null)" || true
   fi
