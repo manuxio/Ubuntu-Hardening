@@ -64,6 +64,15 @@ sudo bash scripts/setup-tls.sh site1 --self-signed                       # stagi
 sudo bash scripts/setup-tls.sh site1 --letsencrypt --email you@dom.tld   # real cert + auto-renew
 ```
 
+Measure it (optional but recommended — run `audit-os.sh --baseline` *before* step 1
+to compare):
+
+```bash
+sudo bash scripts/audit-os.sh --verify     # Lynis hardening index (e.g. 65 -> 73)
+sudo bash scripts/scan-cve.sh              # Trivy: CVEs in installed packages
+sudo bash scripts/audit-cis.sh             # OpenSCAP: CIS benchmark score + HTML report
+```
+
 Repeat step 2–4 for each site. Everything is **interactive with sensible
 defaults** and **env-overridable** (pre-seed a `sites/<name>.env`), **idempotent**,
 and prints the verification commands at the end. See [`example.md`](example.md)
@@ -101,6 +110,9 @@ systemd) — those are validated on a real VM. See [`PLAN.md`](PLAN.md) §Test.
 | `scripts/enforce-vhost.sh` | complain → enforce, with soak check + auto-rollback |
 | `scripts/setup-tls.sh` | HTTPS: self-signed or Let's Encrypt (+ auto-renew) |
 | `scripts/tune-vhost.sh` | day-2 policy (egress / reach dirs / limits), kept in sync |
+| `scripts/audit-os.sh` | Lynis audit + hardening index (baseline/verify bracket) |
+| `scripts/scan-cve.sh` | Trivy — CVE scan of installed packages (patching axis) |
+| `scripts/audit-cis.sh` | OpenSCAP — CIS benchmark evaluation (+ opt-in remediate) |
 | `scripts/show-aa-denials.sh` + `add-aa-permit.sh` | soak workflow: list denials, grant one |
 | `tools/hardening-check.php` / `hardening-report.php` | GUI/JSON hardening self-test (temporary / gated) |
 

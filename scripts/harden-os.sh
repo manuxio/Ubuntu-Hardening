@@ -161,15 +161,73 @@ fi
 # --- 11. sysctl --------------------------------------------------------------
 log "sysctl hardening"
 cat > /etc/sysctl.d/99-hardening.conf <<'EOF'
+# network
 net.ipv4.conf.all.rp_filter = 1
+net.ipv4.conf.default.rp_filter = 1
 net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv4.conf.all.secure_redirects = 0
 net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.default.send_redirects = 0
 net.ipv4.conf.all.accept_source_route = 0
+net.ipv4.conf.default.accept_source_route = 0
+net.ipv4.conf.all.log_martians = 1
+net.ipv4.icmp_echo_ignore_broadcasts = 1
+net.ipv4.icmp_ignore_bogus_error_responses = 1
 net.ipv4.tcp_syncookies = 1
+net.ipv6.conf.all.accept_redirects = 0
+net.ipv6.conf.all.accept_source_route = 0
+net.ipv6.conf.all.accept_ra = 0
+# kernel
 kernel.randomize_va_space = 2
+kernel.kptr_restrict = 2
+kernel.dmesg_restrict = 1
+kernel.yama.ptrace_scope = 1
+kernel.perf_event_paranoid = 3
+kernel.unprivileged_bpf_disabled = 1
+net.core.bpf_jit_harden = 2
+# filesystem
 fs.protected_hardlinks = 1
 fs.protected_symlinks = 1
+fs.protected_fifos = 2
+fs.protected_regular = 2
+fs.suid_dumpable = 0
 EOF
 ! is_container && sysctl --system >/dev/null 2>&1 || info "(container) sysctl file written, not applied"
 
-log "OS hardening complete. Next: run harden-vhost.sh per site (AppArmor is in COMPLAIN — soak, then enforce)."
+# --- 12. OS baseline hardening (Lynis-informed) ------------------------------
+log "OS baseline: login.defs, pam_pwquality, core dumps, module blacklist, banner"
+# password aging + default umask (login.defs)
+if [ -f /etc/login.defs ]; then
+  backup_once /etc/login.defs
+  sed -i -E \
+    -e 's/^#?\s*PASS_MAX_DAYS.*/PASS_MAX_DAYS\t365/' \
+    -e 's/^#?\s*PASS_MIN_DAYS.*/PASS_MIN_DAYS\t1/' \
+    -e 's/^#?\s*PASS_WARN_AGE.*/PASS_WARN_AGE\t7/' \
+    -e 's/^#?\s*UMASK.*/UMASK\t\t027/' /etc/login.defs
+fi
+# password quality (affects only NEW passwords; the package wires pam in)
+ensure_packages libpam-pwquality
+if [ -d /etc/security ]; then
+  cat > /etc/security/pwquality.conf <<'EOF'
+minlen = 14
+minclass = 3
+dcredit = -1
+ucredit = -1
+lcredit = -1
+ocredit = -1
+maxrepeat = 3
+gecoscheck = 1
+EOF
+fi
+# disable core dumps (info-leak) — limits + sysctl (fs.suid_dumpable set above)
+mkdir -p /etc/security/limits.d
+printf '* hard core 0\n' > /etc/security/limits.d/99-hardening.conf
+# blacklist uncommon filesystems/protocols + usb-storage
+cp "$CFG/modprobe-hardening.conf" /etc/modprobe.d/hardening.conf
+# legal login banners
+cp "$CFG/issue-banner" /etc/issue
+cp "$CFG/issue-banner" /etc/issue.net
+
+log "OS hardening complete. Measure with:  audit-os.sh --verify   (baseline: audit-os.sh --baseline)"
+log "Next: harden-vhost.sh per site (AppArmor in COMPLAIN — soak, then enforce)."

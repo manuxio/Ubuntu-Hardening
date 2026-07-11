@@ -191,8 +191,9 @@ See `PLAN.md` §Test harness for the exact flow and caveats.
 ## Repo layout (target)
 
 ```text
-scripts/       harden-os.sh, harden-vhost.sh, tune-vhost.sh, enforce-vhost.sh,
-               setup-tls.sh, show-aa-denials.sh, add-aa-permit.sh, lib/
+scripts/       harden-os.sh, harden-vhost.sh, tune-vhost.sh, enforce-vhost.sh, setup-tls.sh,
+               audit-os.sh (Lynis), scan-cve.sh (Trivy), audit-cis.sh (OpenSCAP),
+               show-aa-denials.sh, add-aa-permit.sh, lib/
 templates/     *.tmpl rendered per-site by harden-vhost.sh
 config/        apparmor master, auditd rules, systemd/nginx global snippets
 sites/         <name>.env — per-site answers (also non-interactive test input)

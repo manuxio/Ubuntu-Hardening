@@ -103,6 +103,38 @@ codice non scrivibile dall'utente runtime**:
 
 ## 5. Installazione passo-passo (server reale)
 
+### 5.0 Audit e misura (Lynis · Trivy · OpenSCAP) — fase preliminare consigliata
+
+Misura **prima e dopo** l'hardening con strumenti standard. Sono read-only
+(tranne `audit-cis.sh --remediate`); i report vanno in `/var/log/hardening-audit/`.
+
+```bash
+# BASELINE (prima di harden-os) — Lynis calcola l'hardening index (0-100)
+sudo bash scripts/audit-os.sh --baseline
+
+#  ... applica l'hardening (5.1 -> 5.5) ...
+
+# VERIFY (dopo) — rimisura e mostra il delta
+sudo bash scripts/audit-os.sh --verify            # es. reale: 65 -> 73
+
+# CVE dei pacchetti (asse "sei patchato?", diverso dall'hardening di config)
+sudo bash scripts/scan-cve.sh                      # Trivy: HIGH/CRITICAL
+#   -> remediation = apt upgrade (unattended-upgrades è già attivo)
+
+# Compliance CIS (OpenSCAP + SCAP Security Guide ubuntu2204)
+sudo bash scripts/audit-cis.sh                     # profilo cis_level1_server, report HTML
+sudo bash scripts/audit-cis.sh --level2            # CIS Level 2
+sudo bash scripts/audit-cis.sh --remediate         # applica i fix (RISCHIOSO, opt-in; ri-testa i siti)
+```
+
+- **Lynis** *misura*, non hardenizza: usalo come bracket **baseline → harden →
+  verify**. `harden-os.sh` include già i controlli OS che Lynis segnala
+  (login.defs/aging, `pam_pwquality`, blacklist moduli kernel, core dump off,
+  banner legale, sysctl estesi).
+- **Trivy** copre le CVE dei pacchetti (patching), asse complementare.
+- **OpenSCAP/CIS** dà un punteggio di compliance standard; `--remediate` applica
+  i fix (attenzione: può cambiare cose non coperte dai nostri script).
+
 ### 5.1 Trasferire il repository sul server
 
 Da una macchina che ha accesso SSH al server (esempio con tar over ssh):
@@ -494,8 +526,9 @@ promemoria generale.
 ## 10. Struttura del repository
 
 ```text
-scripts/       harden-os.sh, harden-vhost.sh, tune-vhost.sh, enforce-vhost.sh,
-               setup-tls.sh, show-aa-denials.sh, add-aa-permit.sh, lib/{common,policy}.sh
+scripts/       harden-os.sh, harden-vhost.sh, tune-vhost.sh, enforce-vhost.sh, setup-tls.sh,
+               audit-os.sh (Lynis), scan-cve.sh (Trivy), audit-cis.sh (OpenSCAP/CIS),
+               show-aa-denials.sh, add-aa-permit.sh, lib/{common,policy}.sh
 templates/     pool php-fpm, hat AppArmor, nginx app-snippet + server HTTP + HTTPS
 tools/         hardening-check.php (temporaneo), hardening-report.php (gated Ed25519), hardening-token.php (keygen/firma)
 config/        profilo AppArmor master, regole auditd, snippet nginx/TLS, drop-in systemd
