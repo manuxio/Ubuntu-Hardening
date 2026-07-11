@@ -104,8 +104,8 @@ run_tls_for() {  # run_tls_for <site> <http+https|https>
     runscript "$SCRIPTS/setup-tls.sh" "$s" --self-signed $both
   fi
 }
-action_tls() {
-  local s mode; s="$(pick_site)" || return; [ -n "$s" ] || return
+tls_for_site() {  # tls_for_site <site> — ask HTTP/HTTPS mode, then cert type
+  local s="$1" mode
   mode="$(ui_menu "Come servire '$s'?" \
     "http+https" "HTTP e HTTPS entrambi attivi (nessun redirect)" \
     "https"      "Solo HTTPS (HTTP -> redirect 301)")" || return
@@ -371,28 +371,43 @@ action_revoke_permit() {  # <site> — pick a granted permit and remove it
 # "Modify a site" — a grouped menu (Egress / Directory / PHP / TLS). Each group
 # is a submenu that STAYS OPEN after a change and shows the current state, so you
 # can make several edits without dropping back to the top. Drives tune-vhost.sh.
-action_modify() {
+action_modify() {  # "Gestisci siti" — pick a site, then every per-site operation
   local s g
   s="$(pick_site)" || return; [ -n "$s" ] || return
   while true; do
-    g="$(ui_menu "Modifica '$s' — scegli un gruppo:" \
-      nginx  "Nginx       (domini/alias, abilita/disabilita)" \
-      egress "Egress      (destinazioni consentite / bloccate)" \
-      dir    "Directory   (permessi lettura / scrittura)" \
-      exec   "Esecuzione  (permessi AppArmor exec di programmi)" \
-      php    "PHP / Pool  (memoria, limiti, workers, funzioni)" \
-      tls    "TLS / Cookie (session.cookie_secure)" \
-      show   "Mostra tutta la policy del sito" \
-      back   "<< Indietro")" || return
+    g="$(ui_menu "Gestisci '$s' — scegli un'operazione:" \
+      nginx   "Nginx: domini (server_name), abilita/disabilita" \
+      https   "HTTPS / TLS: certificato (self-signed o Let's Encrypt)" \
+      egress  "Egress: destinazioni consentite / bloccate" \
+      dir     "Directory: permessi lettura / scrittura" \
+      exec    "Esecuzione: permessi AppArmor exec di programmi" \
+      php     "PHP / Pool: memoria, limiti, workers, funzioni" \
+      cookie  "Cookie sicuri (session.cookie_secure)" \
+      enforce "AppArmor: Enforce (soak -> enforce)" \
+      denials "AppArmor: mostra i denial del soak" \
+      probe   "Verifica isolamento del sito" \
+      test    "Deploy pagina di test PHP" \
+      refresh "Aggiorna config (applica gli ultimi template)" \
+      show    "Mostra tutta la policy del sito" \
+      destroy "DISTRUGGI il sito (rimuove config, NON i dati)" \
+      back    "<< Indietro")" || return
     case "$g" in
-      nginx)  mod_nginx "$s" ;;
-      egress) mod_egress "$s" ;;
-      dir)    mod_dir "$s" ;;
-      exec)   mod_exec "$s" ;;
-      php)    mod_php "$s" ;;
-      tls)    mod_tls "$s" ;;
-      show)   runscript "$SCRIPTS/tune-vhost.sh" "$s" show ;;
-      back)   return ;;
+      nginx)   mod_nginx "$s" ;;
+      https)   tls_for_site "$s" ;;
+      egress)  mod_egress "$s" ;;
+      dir)     mod_dir "$s" ;;
+      exec)    mod_exec "$s" ;;
+      php)     mod_php "$s" ;;
+      cookie)  mod_tls "$s" ;;
+      enforce) runscript "$SCRIPTS/enforce-vhost.sh" "$s" ;;
+      denials) runscript "$SCRIPTS/show-aa-denials.sh" "$s" ;;
+      probe)   runscript "$SCRIPTS/probe-vhost.sh" "$s" ;;
+      test)    runscript "$SCRIPTS/deploy-test.sh" "$s" ;;
+      refresh) runscript "$SCRIPTS/refresh-vhost.sh" "$s" ;;
+      show)    runscript "$SCRIPTS/tune-vhost.sh" "$s" show ;;
+      destroy) runscript "$SCRIPTS/destroy-vhost.sh" "$s"
+               [ -d "/etc/hardening/sites/$s" ] || return ;;   # destroyed -> leave
+      back)    return ;;
     esac
   done
 }
@@ -534,15 +549,8 @@ while true; do
     verify   "Audit: verifica + delta (Lynis)" \
     cve      "Scan CVE dei pacchetti (Trivy)" \
     cis      "Audit conformità CIS (OpenSCAP)" \
-    newvhost "Nuovo sito (personalizza TUTTI i parametri)" \
-    modify   "Modifica un sito (nginx, egress, dir, PHP, cookie)" \
-    refresh  "Aggiorna config di un sito (applica gli ultimi template)" \
-    enforce  "Enforce AppArmor di un sito (soak->enforce)" \
-    tls      "HTTPS / TLS di un sito" \
-    deploytest "Deploy pagina di test PHP (verifica un sito)" \
-    probe    "Verifica isolamento di un sito (usa siti esistenti)" \
-    denials  "Mostra i denial AppArmor di un sito" \
-    destroy  "Distruggi un sito (rimuove config, NON i dati)" \
+    newvhost "Crea sito" \
+    modify   "Gestisci siti" \
     e2e      "Test end-to-end (ATTENZIONE: crea site1/site2!)" \
     quit     "Esci")" || break
 
@@ -553,14 +561,7 @@ while true; do
     cve)      runscript "$SCRIPTS/scan-cve.sh" ;;
     cis)      runscript "$SCRIPTS/audit-cis.sh" ;;
     newvhost) action_newvhost ;;
-    enforce)  action_site "$SCRIPTS/enforce-vhost.sh" ;;
-    tls)      action_tls ;;
     modify)   action_modify ;;
-    refresh)  action_site "$SCRIPTS/refresh-vhost.sh" ;;
-    deploytest) action_site "$SCRIPTS/deploy-test.sh" ;;
-    probe)    action_site "$SCRIPTS/probe-vhost.sh" ;;
-    denials)  action_site "$SCRIPTS/show-aa-denials.sh" ;;
-    destroy)  action_site "$SCRIPTS/destroy-vhost.sh" ;;
     e2e)      if ui_yesno "ATTENZIONE: il test end-to-end CREA i siti di prova site1 e site2,
 applica l'hardening OS e li mette in enforce.
 Sono siti REALI che restano finche' non li distruggi (voce 'Distruggi un sito').
