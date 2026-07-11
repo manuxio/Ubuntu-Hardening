@@ -144,65 +144,146 @@ tune_apply() {  # tune_apply <site> <tune-vhost args...>
   fi
 }
 
-# Full "modify an existing site" submenu — every entry drives tune-vhost.sh,
-# which keeps pool / AppArmor / systemd / ufw in sync. Loops so several edits to
-# the same site are easy; 'Indietro' returns to the main menu.
-action_modify() {
-  local s op host port proto k v f p cur
-  s="$(pick_site)" || return; [ -n "$s" ] || return
+# --- current-state summaries shown at the top of each modify group ----------
+egress_summary() {  # egress_summary <site> -> allowed destinations + note
+  local s="$1" out
+  out="$(iptables -S "${s}_EGRESS" 2>/dev/null | grep -- '-j ACCEPT' \
+    | sed -E "s/^-A ${s}_EGRESS //; s/ -j ACCEPT$//; \
+              s/-m conntrack --ctstate [A-Z,]+/risposte a connessioni gia' aperte/; \
+              s/-m (tcp|udp) //g; s#/32##g" | sed 's/^/  /')"
+  if [ -n "$out" ]; then
+    printf 'CONSENTITE (uscita per uid del sito):\n%s\n  -- tutto il resto: BLOCCATO (REJECT) --' "$out"
+  else
+    printf 'Regole egress non attive (ufw off? esegui harden-os). Da policy:\n%s' \
+      "$(sed 's/^/  /' "/etc/hardening/sites/$s/egress-v4.allow" 2>/dev/null || echo '  (nessuna)')"
+  fi
+}
+dir_summary() {  # dir_summary <site> -> read/write reach paths with permissions
+  local s="$1" p D                      # NB: D on its own line — $s isn't set yet
+  D="/etc/hardening/sites/$s"           # inside a single `local` (bash expands first)
+  echo "SCRIVIBILI dall'utente runtime:"
+  if [ -s "$D/reach-rw.paths" ]; then
+    while IFS= read -r p; do [ -n "$p" ] && printf '  %s  %s\n' \
+      "$(stat -c '%A %U:%G' "$p" 2>/dev/null || echo '(assente)')" "$p"; done < "$D/reach-rw.paths"
+  else echo "  (nessuna)"; fi
+  echo "SOLA LETTURA:"
+  if [ -s "$D/reach-ro.paths" ]; then
+    while IFS= read -r p; do [ -n "$p" ] && printf '  %s  %s\n' \
+      "$(stat -c '%A %U:%G' "$p" 2>/dev/null || echo '(assente)')" "$p"; done < "$D/reach-ro.paths"
+  else echo "  (nessuna)"; fi
+}
+
+# --- modify groups: each loops (you stay in it) and shows current state -----
+mod_egress() {  # mod_egress <site>
+  local s="$1" op host port proto
   while true; do
-    op="$(ui_menu "Modifica '$s' — scegli un'operazione:" \
-      show    "Mostra la policy attuale (sola lettura)" \
-      allow   "Egress: APRI una destinazione (host:porta)" \
-      deny    "Egress: CHIUDI una destinazione" \
-      gwrite  "Directory: concedi SCRITTURA" \
-      gread   "Directory: concedi (sola) LETTURA" \
-      revoke  "Directory: REVOCA accesso" \
-      setk    "Impostazione pool (memoria / limiti / flag)" \
-      disable "PHP: DISABILITA una funzione" \
-      enable  "PHP: riabilita una funzione" \
-      tlson   "Cookie sicuri ON (session.cookie_secure)" \
-      tlsoff  "Cookie sicuri OFF (staging HTTP)" \
-      back    "<< Indietro")" || return
+    op="$(ui_menu "Egress di '$s':
+
+$(egress_summary "$s")" \
+      allow "APRI una destinazione (host:porta)" \
+      deny  "CHIUDI una destinazione" \
+      back  "<< Indietro")" || return
     case "$op" in
-      show)  runscript "$SCRIPTS/tune-vhost.sh" "$s" show ;;
       allow|deny)
         host="$(ui_input "Host/IP di destinazione (o 'any'):" "any")" || continue
         port="$(ui_input "Porta:" "587")" || continue
         proto="$(ui_menu "Protocollo:" tcp "TCP" udp "UDP")" || continue
         tune_apply "$s" "$op" "$host" "$port" "$proto" ;;
-      gwrite) p="$(ui_input "Percorso da rendere SCRIVIBILE:" "/srv/${s}-shared")" || continue
+      back) return ;;
+    esac
+  done
+}
+mod_dir() {  # mod_dir <site>
+  local s="$1" op p
+  while true; do
+    op="$(ui_menu "Directory di '$s':
+
+$(dir_summary "$s")" \
+      gwrite "Concedi SCRITTURA su un path" \
+      gread  "Concedi (sola) LETTURA su un path" \
+      revoke "REVOCA un path" \
+      back   "<< Indietro")" || return
+    case "$op" in
+      gwrite) p="$(ui_input "Path da rendere SCRIVIBILE:" "/srv/${s}-shared")" || continue
               [ -n "$p" ] && tune_apply "$s" grant-write "$p" ;;
-      gread)  p="$(ui_input "Percorso da rendere LEGGIBILE:" "/srv/${s}-ro")" || continue
+      gread)  p="$(ui_input "Path da rendere LEGGIBILE:" "/srv/${s}-ro")" || continue
               [ -n "$p" ] && tune_apply "$s" grant-read "$p" ;;
-      revoke) p="$(ui_input "Percorso da REVOCARE:" "")" || continue
+      revoke) p="$(ui_input "Path da REVOCARE:" "")" || continue
               [ -n "$p" ] && tune_apply "$s" revoke "$p" ;;
-      setk)
-        k="$(ui_menu "Quale impostazione cambiare?" \
-          memory_limit        "PHP memory_limit (es. 256M)" \
-          max_execution_time  "PHP max_execution_time (secondi)" \
-          upload_max_filesize "PHP upload_max_filesize (es. 32M)" \
-          post_max_size       "PHP post_max_size (es. 32M)" \
-          allow_url_fopen     "PHP allow_url_fopen (on/off)" \
-          display_errors      "PHP display_errors (on/off)" \
-          expose_php          "PHP expose_php (on/off)" \
-          pm.max_children     "pool pm.max_children (worker max)" \
-          pm.max_requests     "pool pm.max_requests (ricicla worker)" \
-          MemoryMax           "cgroup MemoryMax (es. 512M)" \
-          CPUQuota            "cgroup CPUQuota (es. 50%)" \
-          TasksMax            "cgroup TasksMax (es. 100)")" || continue
-        cur="$(pool_get "$s" "$k")"
-        v="$(ui_input "Valore per $k  (attuale: ${cur:-non impostato}):" "$cur")" || continue
-        [ -n "$v" ] && tune_apply "$s" set "$k" "$v" ;;
-      disable) cur="$(pool_get "$s" disable_functions)"
-               f="$(ui_input "Funzione PHP da DISABILITARE. Gia' disabilitate: ${cur:-nessuna}" "")" || continue
-               [ -n "$f" ] && tune_apply "$s" disable "$f" ;;
-      enable)  cur="$(pool_get "$s" disable_functions)"
-               f="$(ui_input "Funzione da RIABILITARE (una tra le attuali: ${cur:-nessuna})" "")" || continue
-               [ -n "$f" ] && tune_apply "$s" enable "$f" ;;
-      tlson)   tune_apply "$s" tls-on ;;
-      tlsoff)  tune_apply "$s" tls-off ;;
-      back)    return ;;
+      back)   return ;;
+    esac
+  done
+}
+mod_php() {  # mod_php <site> — each entry shows its CURRENT value; stays open
+  local s="$1" sel v f cur
+  while true; do
+    sel="$(ui_menu "PHP / Pool di '$s' — scegli cosa cambiare:" \
+      memory_limit        "memory_limit         = $(pool_get "$s" memory_limit)" \
+      max_execution_time  "max_execution_time   = $(pool_get "$s" max_execution_time)" \
+      upload_max_filesize "upload_max_filesize  = $(pool_get "$s" upload_max_filesize)" \
+      post_max_size       "post_max_size        = $(pool_get "$s" post_max_size)" \
+      pm.max_children     "pm.max_children      = $(pool_get "$s" pm.max_children)" \
+      pm.max_requests     "pm.max_requests      = $(pool_get "$s" pm.max_requests)" \
+      allow_url_fopen     "allow_url_fopen      = $(pool_get "$s" allow_url_fopen)" \
+      display_errors      "display_errors       = $(pool_get "$s" display_errors)" \
+      expose_php          "expose_php           = $(pool_get "$s" expose_php)" \
+      MemoryMax           "MemoryMax (cgroup)   = $(pool_get "$s" MemoryMax)" \
+      CPUQuota            "CPUQuota (cgroup)    = $(pool_get "$s" CPUQuota)" \
+      TasksMax            "TasksMax (cgroup)    = $(pool_get "$s" TasksMax)" \
+      __disable "Disabilita una funzione PHP ..." \
+      __enable  "Riabilita una funzione PHP ..." \
+      __back    "<< Indietro")" || return
+    case "$sel" in
+      __back) return ;;
+      __disable) cur="$(pool_get "$s" disable_functions)"
+                 f="$(ui_input "Funzione da DISABILITARE. Gia' disabilitate: ${cur:-nessuna}" "")" || continue
+                 [ -n "$f" ] && tune_apply "$s" disable "$f" ;;
+      __enable)  cur="$(pool_get "$s" disable_functions)"
+                 f="$(ui_input "Funzione da RIABILITARE (una tra: ${cur:-nessuna})" "")" || continue
+                 [ -n "$f" ] && tune_apply "$s" enable "$f" ;;
+      *) cur="$(pool_get "$s" "$sel")"
+         v="$(ui_input "Valore per $sel  (attuale: ${cur:-non impostato}):" "$cur")" || continue
+         [ -n "$v" ] && tune_apply "$s" set "$sel" "$v" ;;
+    esac
+  done
+}
+mod_tls() {  # mod_tls <site>
+  local s="$1" op cur
+  while true; do
+    cur="$(pool_get "$s" session.cookie_secure)"
+    op="$(ui_menu "Cookie/TLS di '$s'  (session.cookie_secure attuale: ${cur:-off}):" \
+      on   "cookie_secure ON  (i cookie viaggiano solo su HTTPS)" \
+      off  "cookie_secure OFF (staging HTTP)" \
+      back "<< Indietro")" || return
+    case "$op" in
+      on)   tune_apply "$s" tls-on ;;
+      off)  tune_apply "$s" tls-off ;;
+      back) return ;;
+    esac
+  done
+}
+
+# "Modify a site" — a grouped menu (Egress / Directory / PHP / TLS). Each group
+# is a submenu that STAYS OPEN after a change and shows the current state, so you
+# can make several edits without dropping back to the top. Drives tune-vhost.sh.
+action_modify() {
+  local s g
+  s="$(pick_site)" || return; [ -n "$s" ] || return
+  while true; do
+    g="$(ui_menu "Modifica '$s' — scegli un gruppo:" \
+      egress "Egress      (destinazioni consentite / bloccate)" \
+      dir    "Directory   (permessi lettura / scrittura)" \
+      php    "PHP / Pool  (memoria, limiti, workers, funzioni)" \
+      tls    "TLS / Cookie (session.cookie_secure)" \
+      show   "Mostra tutta la policy del sito" \
+      back   "<< Indietro")" || return
+    case "$g" in
+      egress) mod_egress "$s" ;;
+      dir)    mod_dir "$s" ;;
+      php)    mod_php "$s" ;;
+      tls)    mod_tls "$s" ;;
+      show)   runscript "$SCRIPTS/tune-vhost.sh" "$s" show ;;
+      back)   return ;;
     esac
   done
 }
