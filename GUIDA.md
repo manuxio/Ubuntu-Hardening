@@ -48,9 +48,18 @@ Un singolo fatto di policy è applicato in **più file contemporaneamente**, che
 devono restare coerenti:
 
 - **"l'utente runtime può scrivere nella cartella X"** = `open_basedir` del pool
-  **+** hat AppArmor (`X/ rw, X/** rwk,`) **+** `ReadWritePaths` di systemd.
+  **+** hat AppArmor (`X/ rw, X/** rwk,`) **+** `ReadWritePaths` di systemd **+**,
+  se X è sotto il docroot, il **deny PHP di nginx** (regione `hardening:nophp`:
+  nessuna esecuzione di `.php` nelle cartelle scrivibili — vettore webshell).
 - **"l'utente runtime può raggiungere host:porta"** = una regola nella catena
   `<SITE>_EGRESS` in `/etc/ufw/before.rules` (+ `before6.rules`).
+
+`reach_rebuild` (in `lib/policy.sh`) rigenera **tutti e quattro** i punti da un
+unico stato per-sito, così "scrivibile" e "PHP non eseguibile" restano lo stesso
+fatto: ogni `grant-write` aggiunge da solo il deny nginx e non può driftare. Un
+cambio di `ReadWritePaths` fa **riavviare** php-fpm (non basta un reload: il
+namespace sandbox è costruito all'avvio), così la nuova cartella è davvero
+scrivibile subito.
 
 Modificarli a mano è la causa principale dei malfunzionamenti. `tune-vhost.sh`
 è l'unico strumento che cambia **tutti i punti coinvolti in modo atomico**,
@@ -371,6 +380,13 @@ Le altre voci del menu di gestione: **HTTPS/TLS** (self-signed o Let's Encrypt),
 (riapplica gli ultimi template), **Deploy pagina di test**, e **DISTRUGGI**
 (rimuove la configurazione ma **non** i dati sul disco).
 
+> **Deploy pagina di test** installa *due* file: la pagina diagnostica nel
+> docroot (deve essere servita, 200) **e** una piccola probe `.php` in una
+> cartella scrivibile (es. `images/`), dove nginx deve **rifiutare** l'esecuzione
+> PHP → quella URL deve dare **403**. Lo script lo verifica da solo e stampa
+> l'esito: è la prova diretta che una webshell caricata in una dir di upload non
+> verrebbe mai eseguita.
+
 ### 5.6 Verifica e scansioni dal menu
 
 Tre voci di **Gestisci siti** provano che il contenimento funziona.
@@ -682,7 +698,8 @@ si cambiano a **tre livelli**:
 
 **NON modificare a mano** (rigenerati dalla sync-engine → le tue modifiche
 andrebbero perse): `open_basedir` del pool, la regione `reach` dell'hat AppArmor,
-`ReadWritePaths` systemd, le catene `<sito>_EGRESS`. Per quelli usa `tune-vhost.sh`.
+`ReadWritePaths` systemd, la regione `hardening:nophp` nello snippet nginx, le
+catene `<sito>_EGRESS`. Per quelli usa `tune-vhost.sh`.
 
 > **Re-render → ri-enforce.** Ri-eseguire `harden-vhost.sh` rigenera pool e hat
 > **riportando l'hat a complain**. Dopo un re-render rilancia
@@ -870,6 +887,19 @@ promemoria generale.
 - **`open_basedir` con slash finale.** Senza lo slash `/var/www/html/web_user`
   fa match anche su directory sorelle. Tenere allineati i nomi singolare/plurale
   (`logs` vs `log`) e creare le cartelle in anticipo.
+- **Niente PHP nelle cartelle scrivibili — e non basta `noexec`.** Il vettore
+  webshell è un `.php` caricato in una dir di upload. `noexec` sul mount **non**
+  lo ferma (PHP *interpreta* il file, il kernel non fa `exec()`); nemmeno
+  `security.limit_extensions=.php` (il file droppato *è* `.php`). Il blocco è a
+  livello nginx: la regione `hardening:nophp` nega l'esecuzione `.php` in ogni
+  dir scrivibile sotto il docroot, rigenerata da `reach_rebuild` ad ogni
+  `grant-write` (quindi non serve elencarle a mano e non driftano). Verifica con
+  "Deploy pagina di test": la probe in `images/` deve dare **403**.
+- **`ReadWritePaths` richiede un RESTART, non un reload.** Il namespace di
+  `ProtectSystem=strict` è costruito all'avvio dell'unità: aggiungere una
+  cartella a `ReadWritePaths` + `daemon-reload` **non** la rende scrivibile per il
+  processo in esecuzione — serve `systemctl restart`. `reach_rebuild` rileva il
+  cambio e riavvia php-fpm solo allora (un re-run senza modifiche non riavvia).
 - **nginx gira come `www-data`.** Ogni cartella superiore del docroot deve essere
   attraversabile da www-data, altrimenti `stat() ... Permission denied` → 502.
 - **AVC in `/var/log/audit/audit.log`, non nel journal.** Con auditd installato,

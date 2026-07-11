@@ -175,10 +175,11 @@ render_template "$TPL/apparmor-child.tmpl" "$HAT" SITE SITE_PARENT
 
 # --- Render nginx: shared app snippet + HTTP server block -------------------
 log "Rendering nginx app snippet + HTTP server block"
-WRITABLE_REGEX="$(printf '%s' "$WRITABLE_DIRS" | tr ' ' '|')"
 NGX_SNIP="/etc/nginx/snippets/${SITE}-app.conf"
 mkdir -p /etc/nginx/snippets
-render_template "$TPL/nginx-app.conf.tmpl" "$NGX_SNIP" SITE DOCROOT SOCKET WRITABLE_REGEX CLIENT_MAX_BODY
+# The nginx snippet ships an EMPTY hardening:nophp region; reach_rebuild (below)
+# fills it from the writable-dir policy set once reach paths are recorded.
+render_template "$TPL/nginx-app.conf.tmpl" "$NGX_SNIP" SITE DOCROOT SOCKET CLIENT_MAX_BODY
 # Don't clobber an existing TLS wrapper (set up by setup-tls.sh): the shared app
 # snippet above is refreshed either way, so both HTTP and HTTPS pick up changes.
 if grep -q 'listen 443' "$NGX_AVAIL" 2>/dev/null; then

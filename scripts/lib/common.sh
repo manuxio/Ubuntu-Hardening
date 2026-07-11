@@ -146,8 +146,12 @@ write_region() {
     # Replace existing region using awk. Match markers ignoring leading
     # whitespace, so an indented marker line (e.g. inside an AppArmor profile
     # block) is still recognised.
+    # Pass the replacement through the ENVIRONMENT, not `-v`: awk processes
+    # backslash escapes in -v values, so a `\.` in the content (e.g. an nginx
+    # regex) would be silently rewritten to `.`. ENVIRON[] is taken verbatim.
     local tmp; tmp="$(mktemp)"
-    awk -v b="$begin" -v e="$end" -v repl="$block" '
+    REGION_REPL="$block" awk -v b="$begin" -v e="$end" '
+      BEGIN { repl = ENVIRON["REGION_REPL"] }
       { t=$0; sub(/^[ \t]+/,"",t) }
       t==b {print repl; skip=1; next}
       t==e {skip=0; next}

@@ -51,8 +51,11 @@ A single logical policy fact is enforced in **several files at once**, and they
 must never drift:
 
 - **"runtime user may write dir X"** = php-fpm pool `open_basedir` **and** the
-  AppArmor child hat (`X/ rw, X/** rwk,`) **and** systemd `ReadWritePaths` —
-  all three, or you get an enforce-mode denial or an open_basedir error.
+  AppArmor child hat (`X/ rw, X/** rwk,`) **and** systemd `ReadWritePaths`
+  **and**, when X is under the docroot, the nginx `hardening:nophp` deny (no
+  `.php` execution in writable web dirs — the webshell vector) — all of them, or
+  you get an enforce-mode denial, an open_basedir error, or an executable upload
+  dir. `reach_rebuild` regenerates all four from one state dir.
 - **"runtime user may reach host:port"** = a rule in that site's `<SITE>_EGRESS`
   chain in `/etc/ufw/before.rules` (+`before6.rules`).
 
@@ -148,6 +151,24 @@ No single layer is trusted to hold.
   `/var/www/html/web_user` prefix-matches siblings; also keep singular/plural
   path names (`logs` vs `log`) aligned with what the app actually uses, and make
   the dirs exist so the app never walks *up* the tree creating them.
+- **systemd `ReadWritePaths` needs a RESTART, not a reload:** the
+  `ProtectSystem=strict` mount namespace is built at unit start, so a new writable
+  dir added to the drop-in + `daemon-reload` stays read-only for the *running*
+  worker (PHP write → EROFS) until `systemctl restart`. `reach_rebuild` detects a
+  changed RWP set and restarts php-fpm only then (a no-op re-run must not restart
+  and blip the other pools). `reload`/`reload-or-restart` will NOT do it.
+- **`write_region` content must go through the environment, not `awk -v`:** awk
+  processes backslash escapes in `-v` values, so a `\.` in region content (e.g.
+  the nginx `hardening:nophp` regex) is silently rewritten to `.`. Pass it via
+  `REGION_REPL=... awk 'BEGIN{repl=ENVIRON["REGION_REPL"]}'`. Only bit anything
+  once nginx (backslash-heavy) content started flowing through it; AppArmor/egress
+  regions have no backslashes so it went unnoticed.
+- **No PHP in writable web dirs is an nginx job, kept in sync:** `noexec` does NOT
+  stop a dropped `.php` (PHP interprets, never `exec()`s it) and
+  `security.limit_extensions=.php` doesn't help (the shell IS `.php`). The
+  `hardening:nophp` region denies `.php` under every writable docroot dir and is
+  rebuilt by `reach_rebuild` from `reach-rw ∩ docroot`, so `grant-write` adds the
+  deny automatically. `deploy-test.sh` drops a probe in `images/` and asserts 403.
 - **nginx runs as `www-data`** — every parent dir of the docroot must be
   traversable by www-data (owner or group), or you get `stat() ... Permission
   denied` → 502. `chown www-data:www-data` the site parent, `chmod 750`.

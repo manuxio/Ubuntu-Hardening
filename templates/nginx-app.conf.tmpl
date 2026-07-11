@@ -17,8 +17,12 @@ location ~* \.(?:ini|log|sh|bak|sql|twig)$ { deny all; }
 
 # Kill PHP execution in writable/upload dirs (nginx equivalent of SetHandler
 # None). MUST precede the generic PHP location, and cover PATH_INFO too so a
-# /images/shell.php/x request can't slip through.
-location ~* ^/(@@WRITABLE_REGEX@@)/.*\.php(/|$) { deny all; }
+# /images/shell.php/x request can't slip through. This region is REBUILT by
+# lib/policy.sh (nginx_nophp_rebuild) from the site's writable-dir policy set, so
+# every `grant-write` adds its deny here automatically and it can't drift.
+# DO NOT edit by hand.
+# >>> hardening:nophp >>>
+# <<< hardening:nophp <<<
 
 # Front controller.
 location / { try_files $uri $uri/ /index.php?$args; }

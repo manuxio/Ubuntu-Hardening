@@ -106,14 +106,82 @@ reach_rebuild() {                               # SITE
   fi
 
   # 3) systemd ReadWritePaths = rw paths (ProtectSystem=strict makes the rest ro).
+  # The sandbox mount namespace is built at UNIT START, so a changed RWP set only
+  # takes effect on a full RESTART — reload/daemon-reload do NOT rebuild it. We
+  # detect a real change and restart php-fpm only then (a no-op re-run must not
+  # restart, and unchanged paths must not blip the other pools).
+  local rwp_changed=0 dropin="$dropin_dir/${site}-reach.conf" newrwp
   if [ -n "$rw" ]; then
     mkdir -p "$dropin_dir"
-    { printf '[Service]\nReadWritePaths=';
-      for p in $rw; do printf '%s ' "$p"; done; printf '\n'; } > "$dropin_dir/${site}-reach.conf"
-    has_systemd && systemctl daemon-reload 2>/dev/null || true
+    newrwp="$({ printf '[Service]\nReadWritePaths=';
+      for p in $rw; do printf '%s ' "$p"; done; printf '\n'; })"
+    if [ ! -f "$dropin" ] || [ "$(cat "$dropin")" != "$newrwp" ]; then
+      printf '%s\n' "$newrwp" > "$dropin"
+      has_systemd && systemctl daemon-reload 2>/dev/null || true
+      rwp_changed=1
+    fi
   fi
 
-  reload_service "php${php}-fpm" 2>/dev/null || true
+  # Apply to the running service. A RWP change needs a RESTART (rebuilds the
+  # sandbox namespace so the new writable dir is actually writable); a pool-only
+  # change (open_basedir) is fine with a reload. Restart also re-execs the master
+  # AppArmor-confined, which is what we want anyway.
+  if [ "$rwp_changed" = 1 ] && has_systemd; then
+    systemctl restart "php${php}-fpm" 2>/dev/null || reload_service "php${php}-fpm" || true
+  else
+    reload_service "php${php}-fpm" 2>/dev/null || true
+  fi
+
+  # 4) nginx: refuse to execute PHP in any writable dir under the docroot.
+  nginx_nophp_rebuild "$site"
+}
+
+# Rebuild the "no PHP execution in writable dirs" nginx region from the site's
+# writable set (reach-rw ∩ docroot). This makes "the runtime user may WRITE here"
+# and "PHP may NOT execute here" the SAME policy fact: every grant-write adds its
+# deny automatically, so a webshell dropped in an upload/cache dir is never
+# served (403). Dirs OUTSIDE the docroot aren't web-reachable → no rule needed.
+# The region MUST sit before the fastcgi PHP handler (nginx picks the first
+# matching regex location); we anchor it ahead of the front controller.
+nginx_nophp_rebuild() {                          # SITE
+  local site="$1" snip docroot d rw p rel alts=""
+  snip="/etc/nginx/snippets/${site}-app.conf"
+  [ -f "$snip" ] || return 0
+  docroot="$(policy_meta_get "$site" DOCROOT)"; docroot="${docroot%/}"
+  [ -n "$docroot" ] || return 0
+  d="$(policy_state_dir "$site")"
+  rw="$( [ -f "$d/reach-rw.paths" ] && cat "$d/reach-rw.paths" || true )"
+
+  local seen=""
+  for p in $rw; do
+    p="${p%/}"
+    case "$p/" in "$docroot"/*) : ;; *) continue ;; esac    # only paths under docroot
+    rel="${p#"$docroot"/}"
+    [ -n "$rel" ] || continue
+    rel="${rel//./\\.}"                                      # escape dots for the regex
+    case "|$seen|" in *"|$rel|"*) continue ;; esac           # dedup
+    seen="${seen:+$seen|}$rel"
+    alts="${alts:+$alts|}$rel"
+  done
+
+  local block
+  if [ -n "$alts" ]; then
+    block="location ~* ^/(${alts})/.*\\.(php|phtml|php[0-9]|phar)(/|\$) { deny all; }"
+  else
+    block="# (no writable dirs under docroot — nothing to deny)"
+  fi
+
+  # On a legacy snippet without markers, insert an empty region ahead of the
+  # front controller so write_region replaces IN PLACE (never appends to EOF,
+  # which would put the deny AFTER the handler and silently disable it).
+  _ensure_region_before_anchor "$snip" "nophp" '^location /'
+  write_region "$snip" "nophp" "$block"
+
+  if command -v nginx >/dev/null 2>&1 && nginx -t >/dev/null 2>&1; then
+    reload_service nginx
+  else
+    warn "nginx -t failed after nophp rebuild — NOT reloading (inspect $snip)"
+  fi
 }
 
 # --- egress ------------------------------------------------------------------
