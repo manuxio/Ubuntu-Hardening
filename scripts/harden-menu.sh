@@ -33,7 +33,18 @@ fi
 ui_menu() {  # ui_menu "prompt" tag1 "label1" tag2 "label2" ...  -> echoes chosen tag
   local prompt="$1"; shift
   if [ "$UI" = whiptail ]; then
-    whiptail --title "$TITLE" --notags --menu "$prompt" 22 76 13 "$@" 3>&1 1>&2 2>&3
+    # adaptive box height: fit the (possibly multi-line, state-showing) prompt +
+    # the items, but never exceed the terminal — otherwise whiptail truncates the
+    # prompt and the "current state" summary vanishes.
+    local plines items h lh maxh
+    plines=$(printf '%s\n' "$prompt" | wc -l)
+    items=$(( $# / 2 ))
+    maxh=$(tput lines 2>/dev/null || echo 24)
+    h=$(( plines + items + 8 ))
+    [ "$h" -gt $(( maxh - 1 )) ] && h=$(( maxh - 1 ))
+    [ "$h" -lt 12 ] && h=12
+    lh=$(( h - plines - 6 )); [ "$lh" -lt 3 ] && lh=3; [ "$lh" -gt "$items" ] && lh=$items
+    whiptail --title "$TITLE" --notags --menu "$prompt" "$h" 80 "$lh" "$@" 3>&1 1>&2 2>&3
     return $?
   fi
   { echo; echo "== $TITLE =="; echo "$prompt"; } >&2
