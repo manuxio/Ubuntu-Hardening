@@ -60,6 +60,27 @@ install_optional() {
     fi
   done
 }
+# Install YARA-X (VirusTotal's Rust rewrite of YARA) — the `yr` CLI. No apt/deb,
+# so we fetch the prebuilt release binary. Best-effort: never fails the run.
+install_yara_x() {
+  command -v yr >/dev/null 2>&1 && { info "yara-x (yr) already present"; return 0; }
+  local arch tag url tmp yr
+  arch="$(uname -m)"
+  case "$arch" in x86_64|aarch64) : ;; *) warn "yara-x: unsupported arch '$arch', skipped"; return 0 ;; esac
+  dpkg -s curl >/dev/null 2>&1 || DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl ca-certificates >/dev/null 2>&1 || true
+  tag="$(curl -fsSL https://api.github.com/repos/VirusTotal/yara-x/releases/latest 2>/dev/null | grep -oP '"tag_name":\s*"\K[^"]+' | head -1)"
+  [ -n "$tag" ] || { warn "yara-x: could not resolve latest release (offline?), skipped"; return 0; }
+  url="https://github.com/VirusTotal/yara-x/releases/download/${tag}/yara-x-${tag}-${arch}-unknown-linux-gnu.tar.gz"
+  tmp="$(mktemp -d)"
+  if curl -fsSL "$url" -o "$tmp/yx.tgz" 2>/dev/null && tar xzf "$tmp/yx.tgz" -C "$tmp" 2>/dev/null; then
+    yr="$(find "$tmp" -name yr -type f | head -1)"
+    [ -n "$yr" ] && install -m 755 "$yr" /usr/local/bin/yr && info "installed yara-x ${tag} -> /usr/local/bin/yr" \
+                 || warn "yara-x: 'yr' not found in archive, skipped"
+  else
+    warn "yara-x: download/extract failed (offline?), skipped"
+  fi
+  rm -rf "$tmp"
+}
 ensure_packages nginx "php${PHP_VERSION}-fpm" "php${PHP_VERSION}-cli" \
   "php${PHP_VERSION}-mysql" "php${PHP_VERSION}-gd" "php${PHP_VERSION}-xml" \
   "php${PHP_VERSION}-mbstring" "php${PHP_VERSION}-curl" \
@@ -301,6 +322,8 @@ if [ -f /etc/default/rkhunter ]; then
          -e 's/^APT_AUTOGEN=.*/APT_AUTOGEN="true"/' /etc/default/rkhunter
 fi
 command -v rkhunter >/dev/null 2>&1 && rkhunter --propupd --quiet 2>/dev/null || true
+# YARA-X (yr) — pattern/malware scanner (complements rkhunter)
+install_yara_x
 
 # Restrict compilers to root only (no non-root code compilation on a web host).
 for p in /usr/bin/cc /usr/bin/gcc /usr/bin/g++ /usr/bin/clang /usr/bin/gcc-*; do
