@@ -284,17 +284,22 @@ proprietari reali; i grant/revoke avvengono scegliendo dai path esistenti
 │   drwxrws--- www-data:www-data  /var/www/html/cef/public_html/images         │
 │   drwxrws--- www-data:www-data  /var/www/html/cef/public_html/media          │
 │   drwxrws--- www-data:www-data  /var/www/html/cef/public_html/cache          │
-│   drwxrws--- www-data:www-data  /var/www/html/cef/public_html/administrator/…│
+│   drwxrws--- www-data:www-data                                               │
+│ /var/www/html/cef/public_html/administrator/cache                            │
 │   drwxrws--- www-data:www-data  /var/www/html/cef/tmp                        │
 │   drwxrws--- www-data:www-data  /var/www/html/cef/sessions                   │
 │   drwxrws--- www-data:www-data  /var/www/html/cef/logs                       │
 │ SOLA LETTURA:                                                                │
 │   drwxr-x--- www-data:www-data  /var/www/html/cef/public_html                │
+│ DIVIETI ESTENSIONI (no-write via AppArmor):                                  │
+│   /var/www/html/cef/public_html/images  ->  .php .phtml .phar                │
 │                                                                              │
-│                 Concedi SCRITTURA su una cartella                            │
-│                 Concedi (sola) LETTURA su una cartella                       │
-│                 REVOCA un path (scegli dall'elenco attuale)                  │
-│                 << Indietro                                                  │
+│    Concedi SCRITTURA su una cartella                                         │
+│    Concedi (sola) LETTURA su una cartella                                    │
+│    REVOCA un path (scegli dall'elenco attuale)                               │
+│    VIETA scrittura di estensioni in una cartella (es. .php negli upload)     │
+│    Rimuovi un divieto di estensioni                                          │
+│    << Indietro                                                               │
 │                                                                              │
 │                     <Ok>                         <Cancel>                    │
 └──────────────────────────────────────────────────────────────────────────────┘
