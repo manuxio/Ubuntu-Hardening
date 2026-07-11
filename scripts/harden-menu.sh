@@ -130,6 +130,9 @@ pool_get() {  # pool_get <site> <key>
   val="${val%%;*}"                                        # drop trailing inline comment
   printf '%s' "$val" | sed 's/[[:space:]]*$//'            # trim trailing whitespace
 }
+meta_get() {  # meta_get <site> <key> — read a value from the site's policy meta
+  sed -n "s/^$2=//p" "/etc/hardening/sites/$1/meta" 2>/dev/null | head -1
+}
 
 # Apply a tune-vhost change, but offer a dry-run preview first (fail-safe).
 tune_apply() {  # tune_apply <site> <tune-vhost args...>
@@ -175,6 +178,28 @@ dir_summary() {  # dir_summary <site> -> read/write reach paths with permissions
 }
 
 # --- modify groups: each loops (you stay in it) and shows current state -----
+mod_nginx() {  # mod_nginx <site> — domains (server_name+aliases) and enable/disable
+  local s="$1" op cur en newv
+  while true; do
+    cur="$(meta_get "$s" SERVER_NAME)"
+    en="DISABILITATO (non servito da nginx)"; [ -e "/etc/nginx/sites-enabled/$s" ] && en="ATTIVO (servito)"
+    op="$(ui_menu "Nginx di '$s':
+
+  domini (server_name): ${cur:-?}
+  stato sites-enabled : $en" \
+      domains "Cambia domini / alias (server_name)" \
+      enable  "Abilita il sito (link in sites-enabled)" \
+      disable "Disabilita il sito (rimuovi da sites-enabled)" \
+      back    "<< Indietro")" || return
+    case "$op" in
+      domains) newv="$(ui_input "Domini separati da spazio: il 1o e' il principale, gli altri gli alias (es: www.sito.it sito.it):" "$cur")" || continue
+               [ -n "$newv" ] && tune_apply "$s" server-name "$newv" ;;
+      enable)  tune_apply "$s" site-enable ;;
+      disable) tune_apply "$s" site-disable ;;
+      back)    return ;;
+    esac
+  done
+}
 mod_egress() {  # mod_egress <site>
   local s="$1" op host port proto
   while true; do
@@ -276,6 +301,7 @@ action_modify() {
   s="$(pick_site)" || return; [ -n "$s" ] || return
   while true; do
     g="$(ui_menu "Modifica '$s' — scegli un gruppo:" \
+      nginx  "Nginx       (domini/alias, abilita/disabilita)" \
       egress "Egress      (destinazioni consentite / bloccate)" \
       dir    "Directory   (permessi lettura / scrittura)" \
       php    "PHP / Pool  (memoria, limiti, workers, funzioni)" \
@@ -283,6 +309,7 @@ action_modify() {
       show   "Mostra tutta la policy del sito" \
       back   "<< Indietro")" || return
     case "$g" in
+      nginx)  mod_nginx "$s" ;;
       egress) mod_egress "$s" ;;
       dir)    mod_dir "$s" ;;
       php)    mod_php "$s" ;;
@@ -412,7 +439,8 @@ if [ "${1:-}" = "--check" ]; then
   echo "  repo root  : $REPO"
   miss=0
   for s in harden-os.sh harden-vhost.sh enforce-vhost.sh setup-tls.sh tune-vhost.sh \
-           show-aa-denials.sh add-aa-permit.sh audit-os.sh scan-cve.sh audit-cis.sh; do
+           destroy-vhost.sh deploy-test.sh show-aa-denials.sh add-aa-permit.sh \
+           audit-os.sh scan-cve.sh audit-cis.sh; do
     if [ -f "$SCRIPTS/$s" ]; then echo "  [ok]   scripts/$s"; else echo "  [MISS] scripts/$s"; miss=$((miss+1)); fi
   done
   if [ -f "$TESTDIR/tier2-e2e.sh" ]; then echo "  [ok]   test/tier2-e2e.sh"; else echo "  [MISS] test/tier2-e2e.sh"; miss=$((miss+1)); fi
@@ -430,11 +458,13 @@ while true; do
     cve      "Scan CVE dei pacchetti (Trivy)" \
     cis      "Audit conformità CIS (OpenSCAP)" \
     newvhost "Nuovo sito (personalizza TUTTI i parametri)" \
+    modify   "Modifica un sito (nginx, egress, dir, PHP, cookie)" \
     enforce  "Enforce AppArmor di un sito (soak->enforce)" \
     tls      "HTTPS / TLS di un sito" \
-    modify   "Modifica un sito (egress, dir, PHP/pool, cookie, ...)" \
+    deploytest "Deploy pagina di test PHP (verifica un sito)" \
     denials  "Mostra i denial AppArmor di un sito" \
-    e2e      "Esegui il test end-to-end (Tier-2)" \
+    destroy  "Distruggi un sito (rimuove config, NON i dati)" \
+    e2e      "Test end-to-end (ATTENZIONE: crea site1/site2!)" \
     quit     "Esci")" || break
 
   case "$choice" in
@@ -447,8 +477,14 @@ while true; do
     enforce)  action_site "$SCRIPTS/enforce-vhost.sh" ;;
     tls)      action_tls ;;
     modify)   action_modify ;;
+    deploytest) action_site "$SCRIPTS/deploy-test.sh" ;;
     denials)  action_site "$SCRIPTS/show-aa-denials.sh" ;;
-    e2e)      runscript "$TESTDIR/tier2-e2e.sh" ;;
+    destroy)  action_site "$SCRIPTS/destroy-vhost.sh" ;;
+    e2e)      if ui_yesno "ATTENZIONE: il test end-to-end CREA i siti di prova site1 e site2,
+applica l'hardening OS e li mette in enforce.
+Sono siti REALI che restano finche' non li distruggi (voce 'Distruggi un sito').
+
+Continuare?"; then runscript "$TESTDIR/tier2-e2e.sh"; fi ;;
     quit)     break ;;
   esac
 done

@@ -263,6 +263,12 @@ cp "$CFG/modprobe-hardening.conf" /etc/modprobe.d/hardening.conf
 cp "$CFG/issue-banner" /etc/issue
 cp "$CFG/issue-banner" /etc/issue.net
 
+# logrotate: rotate the per-site PHP-FPM logs (nginx's are rotated by its own
+# /etc/logrotate.d/nginx). Ensure the tool is present, then install the config.
+ensure_packages logrotate
+cp "$CFG/logrotate-hardening.conf" /etc/logrotate.d/hardening
+chmod 644 /etc/logrotate.d/hardening
+
 # --- Extended baseline: SSH, integrity/accounting tooling, compilers, nginx TLS
 # All low-risk and reversible; raises the audit posture without operational cost.
 log "OS baseline (extended): SSH hardening, integrity/accounting tools, compilers"

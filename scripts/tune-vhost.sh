@@ -19,6 +19,8 @@
 #                                                 # pm.max_children, pm.max_requests, ...
 #   tune-vhost.sh <SITE> disable <func> | enable <func>
 #   tune-vhost.sh <SITE> tls-on | tls-off
+#   tune-vhost.sh <SITE> server-name "<domains>"    # primary + aliases (nginx + cert)
+#   tune-vhost.sh <SITE> site-enable | site-disable # nginx sites-enabled on/off
 #   tune-vhost.sh <SITE> show
 # Add --dry-run as the last arg to preview without applying.
 # =============================================================================
@@ -128,6 +130,35 @@ case "$ACTION" in
       printf 'php_admin_flag[session.cookie_secure] = %s\n' "$val" >> "$t"; mv "$t" "$POOL"
       reload_service "php${PHP_VERSION}-fpm"
     fi
+    ;;
+
+  server-name)
+    new="${1:?domains}"                       # space-separated: primary + aliases
+    case "$new" in *[/\&\\]*) die "invalid characters in domains: $new" ;; esac
+    NGX_AVAIL="/etc/nginx/sites-available/${SITE}"
+    log "site $SITE: server_name -> $new"
+    if [ $DRY -eq 0 ]; then
+      policy_meta_set "$SITE" SERVER_NAME "$new"
+      if [ -f "$NGX_AVAIL" ]; then
+        t="$(mktemp)"; sed -E "s/^([[:space:]]*)server_name[[:space:]].*/\1server_name ${new};/" "$NGX_AVAIL" > "$t"; mv "$t" "$NGX_AVAIL"
+        nginx -t >/dev/null 2>&1 && reload_service nginx || warn "nginx -t failed after server_name change — check $NGX_AVAIL"
+      fi
+      grep -q 'listen 443' "$NGX_AVAIL" 2>/dev/null && \
+        warn "TLS is active: the certificate still covers the OLD names — reissue with setup-tls.sh $SITE ..."
+    fi
+    ;;
+
+  site-enable)
+    NGX_AVAIL="/etc/nginx/sites-available/${SITE}"; NGX_EN="/etc/nginx/sites-enabled/${SITE}"
+    [ -f "$NGX_AVAIL" ] || die "no nginx config for $SITE (run harden-vhost.sh first)"
+    log "site $SITE: ENABLE (link into nginx sites-enabled)"
+    if [ $DRY -eq 0 ]; then ln -sfn "$NGX_AVAIL" "$NGX_EN"; nginx -t >/dev/null 2>&1 && reload_service nginx || warn "nginx -t failed"; fi
+    ;;
+
+  site-disable)
+    NGX_EN="/etc/nginx/sites-enabled/${SITE}"
+    log "site $SITE: DISABLE (remove from nginx sites-enabled; config kept in sites-available)"
+    if [ $DRY -eq 0 ]; then rm -f "$NGX_EN"; reload_service nginx; fi
     ;;
 
   show)
