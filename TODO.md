@@ -21,6 +21,9 @@ Done:
 - **Directory — grant/revoke pickers**: `revoke` picks from the current reach
   paths (no retyping); `grant-write`/`grant-read` offer the docroot subdirs not
   yet granted + "custom".
+- **Esecuzione (AppArmor exec)** group: shows the exec permits currently granted;
+  granting one is a picker of the DENIED exec attempts from the soak (+ warning),
+  and revoke picks from the granted permits.
 
 Remaining:
 - **Directory group**: also show the AppArmor hat's *effective* r/rw grants (not

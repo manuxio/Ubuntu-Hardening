@@ -319,6 +319,55 @@ mod_tls() {  # mod_tls <site>
   done
 }
 
+# --- program-execution (AppArmor exec) permits ------------------------------
+exec_grants_summary() {  # <site>
+  local f="/etc/hardening/sites/$1/permits.rules"
+  if [ -s "$f" ]; then echo "ESECUZIONI CONSENTITE ora (permessi concessi):"; grep -vE '^\s*#' "$f" | sed 's/^/  /'
+  else echo "Nessun programma eseguibile: il worker non puo' avviare binari esterni (modello no-exec)."; fi
+}
+mod_exec() {  # mod_exec <site> — grant/revoke AppArmor exec permits, informed by soak
+  local s="$1" op tsv="/etc/hardening/sites/$1/permits.rules"
+  while true; do
+    op="$(ui_menu "Esecuzione programmi per '$s':
+
+$(exec_grants_summary "$s")" \
+      grant   "Consenti l'esecuzione di un programma (dai denial del soak)" \
+      revoke  "Revoca un permesso di esecuzione concesso" \
+      denials "Mostra/aggiorna i denial del soak" \
+      back    "<< Indietro")" || return
+    case "$op" in
+      grant)   action_grant_exec "$s" ;;
+      revoke)  action_revoke_permit "$s" ;;
+      denials) runscript "$SCRIPTS/show-aa-denials.sh" "$s" ;;
+      back)    return ;;
+    esac
+  done
+}
+action_grant_exec() {  # <site> — pick an exec DENIAL from the soak and permit it
+  local s="$1" tsv="/etc/hardening/sites/$1/denials.tsv" id cnt kind perm target rule; local -a items=()
+  bash "$SCRIPTS/show-aa-denials.sh" "$s" >/dev/null 2>&1 || true   # refresh denials.tsv
+  if [ ! -s "$tsv" ]; then ui_msg "Nessun denial registrato. Esercita il sito (soak in complain) e riprova."; return; fi
+  while IFS=$'\t' read -r id cnt kind perm target rule; do
+    [ "$kind" = exec ] && items+=("$id" "$target   (${cnt} tentativi negati)")
+  done < "$tsv"
+  if [ ${#items[@]} -eq 0 ]; then ui_msg "Nessun tentativo di ESECUZIONE negato nel soak (ottimo: il sito non prova a eseguire binari)."; return; fi
+  id="$(ui_menu "ATTENZIONE: consentire un exec INDEBOLISCE il modello no-exec.
+Scegli il programma da consentire (tra i tentativi negati):" "${items[@]}")" || return
+  [ -n "$id" ] || return
+  ui_yesno "Consentire davvero l'esecuzione di questo programma per '$s'?
+
+Il worker potra' avviarlo -> riduce l'isolamento. Procedere?" || return
+  runscript "$SCRIPTS/add-aa-permit.sh" "$s" "$id" --force
+}
+action_revoke_permit() {  # <site> — pick a granted permit and remove it
+  local s="$1" f="/etc/hardening/sites/$1/permits.rules" n=0 line; local -a items=()
+  if [ ! -s "$f" ]; then ui_msg "Nessun permesso concesso da revocare."; return; fi
+  while IFS= read -r line; do n=$((n+1)); case "$line" in ''|\#*) ;; *) items+=("$n" "$line") ;; esac; done < "$f"
+  [ ${#items[@]} -eq 0 ] && { ui_msg "Nessun permesso concesso da revocare."; return; }
+  n="$(ui_menu "Quale permesso di esecuzione REVOCARE?" "${items[@]}")" || return
+  [ -n "$n" ] && runscript "$SCRIPTS/add-aa-permit.sh" "$s" --remove "$n"
+}
+
 # "Modify a site" — a grouped menu (Egress / Directory / PHP / TLS). Each group
 # is a submenu that STAYS OPEN after a change and shows the current state, so you
 # can make several edits without dropping back to the top. Drives tune-vhost.sh.
@@ -330,6 +379,7 @@ action_modify() {
       nginx  "Nginx       (domini/alias, abilita/disabilita)" \
       egress "Egress      (destinazioni consentite / bloccate)" \
       dir    "Directory   (permessi lettura / scrittura)" \
+      exec   "Esecuzione  (permessi AppArmor exec di programmi)" \
       php    "PHP / Pool  (memoria, limiti, workers, funzioni)" \
       tls    "TLS / Cookie (session.cookie_secure)" \
       show   "Mostra tutta la policy del sito" \
@@ -338,6 +388,7 @@ action_modify() {
       nginx)  mod_nginx "$s" ;;
       egress) mod_egress "$s" ;;
       dir)    mod_dir "$s" ;;
+      exec)   mod_exec "$s" ;;
       php)    mod_php "$s" ;;
       tls)    mod_tls "$s" ;;
       show)   runscript "$SCRIPTS/tune-vhost.sh" "$s" show ;;
