@@ -386,6 +386,7 @@ action_modify() {  # "Gestisci siti" — pick a site, then every per-site operat
       enforce "AppArmor: Enforce (soak -> enforce)" \
       denials "AppArmor: mostra i denial del soak" \
       probe   "Verifica isolamento del sito" \
+      malware "Scansione malware del docroot (YARA-X)" \
       test    "Deploy pagina di test PHP" \
       refresh "Aggiorna config (applica gli ultimi template)" \
       show    "Mostra tutta la policy del sito" \
@@ -402,6 +403,7 @@ action_modify() {  # "Gestisci siti" — pick a site, then every per-site operat
       enforce) runscript "$SCRIPTS/enforce-vhost.sh" "$s" ;;
       denials) runscript "$SCRIPTS/show-aa-denials.sh" "$s" ;;
       probe)   runscript "$SCRIPTS/probe-vhost.sh" "$s" ;;
+      malware) runscript "$SCRIPTS/scan-malware.sh" "$s" ;;
       test)    runscript "$SCRIPTS/deploy-test.sh" "$s" ;;
       refresh) runscript "$SCRIPTS/refresh-vhost.sh" "$s" ;;
       show)    runscript "$SCRIPTS/tune-vhost.sh" "$s" show ;;
@@ -532,7 +534,8 @@ if [ "${1:-}" = "--check" ]; then
   miss=0
   for s in harden-os.sh harden-vhost.sh enforce-vhost.sh setup-tls.sh tune-vhost.sh \
            refresh-vhost.sh destroy-vhost.sh deploy-test.sh probe-vhost.sh \
-           show-aa-denials.sh add-aa-permit.sh audit-os.sh scan-cve.sh audit-cis.sh; do
+           scan-malware.sh show-aa-denials.sh add-aa-permit.sh audit-os.sh \
+           scan-cve.sh audit-cis.sh; do
     if [ -f "$SCRIPTS/$s" ]; then echo "  [ok]   scripts/$s"; else echo "  [MISS] scripts/$s"; miss=$((miss+1)); fi
   done
   if [ -f "$TESTDIR/tier2-e2e.sh" ]; then echo "  [ok]   test/tier2-e2e.sh"; else echo "  [MISS] test/tier2-e2e.sh"; miss=$((miss+1)); fi
