@@ -215,7 +215,7 @@ $(dir_summary "$s")" \
   done
 }
 mod_php() {  # mod_php <site> — each entry shows its CURRENT value; stays open
-  local s="$1" sel v f cur
+  local s="$1" sel v f cur fn; local -a rearr rmenu
   while true; do
     sel="$(ui_menu "PHP / Pool di '$s' — scegli cosa cambiare:" \
       memory_limit        "memory_limit         = $(pool_get "$s" memory_limit)" \
@@ -236,10 +236,14 @@ mod_php() {  # mod_php <site> — each entry shows its CURRENT value; stays open
     case "$sel" in
       __back) return ;;
       __disable) cur="$(pool_get "$s" disable_functions)"
-                 f="$(ui_input "Funzione da DISABILITARE. Gia' disabilitate: ${cur:-nessuna}" "")" || continue
+                 f="$(ui_input "UNA funzione da disabilitare: verra' AGGIUNTA all'elenco (non riscrivere le altre).
+Gia' disabilitate: ${cur:-nessuna}" "")" || continue
                  [ -n "$f" ] && tune_apply "$s" disable "$f" ;;
       __enable)  cur="$(pool_get "$s" disable_functions)"
-                 f="$(ui_input "Funzione da RIABILITARE (una tra: ${cur:-nessuna})" "")" || continue
+                 if [ -z "$cur" ]; then ui_msg "Nessuna funzione disabilitata da riabilitare."; continue; fi
+                 IFS=',' read -ra rearr <<< "$cur"; rmenu=()
+                 for fn in "${rearr[@]}"; do [ -n "$fn" ] && rmenu+=("$fn" "riabilita  $fn"); done
+                 f="$(ui_menu "Quale RIABILITARE? (le altre restano disabilitate)" "${rmenu[@]}")" || continue
                  [ -n "$f" ] && tune_apply "$s" enable "$f" ;;
       *) cur="$(pool_get "$s" "$sel")"
          v="$(ui_input "Valore per $sel  (attuale: ${cur:-non impostato}):" "$cur")" || continue
