@@ -18,10 +18,11 @@ Done:
 - **TLS / cookie**: shows current `session.cookie_secure`.
 - `enforce-vhost <site> --dry-run` reports the hat's declared minimum (read code
   + write N declared paths).
+- **Directory — grant/revoke pickers**: `revoke` picks from the current reach
+  paths (no retyping); `grant-write`/`grant-read` offer the docroot subdirs not
+  yet granted + "custom".
 
 Remaining:
-- **grant-read / grant-write / revoke**: present the CURRENT reach paths to pick
-  from — especially `revoke` (choose from existing, don't retype a path).
 - **Directory group**: also show the AppArmor hat's *effective* r/rw grants (not
   only the reach state), so the operator sees exactly what the worker can touch.
 - **Clone**: pre-load a new site's form from an existing site's `answers.env`.

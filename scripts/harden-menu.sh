@@ -178,6 +178,29 @@ dir_summary() {  # dir_summary <site> -> read/write reach paths with permissions
 }
 
 # --- modify groups: each loops (you stay in it) and shows current state -----
+# --- reach-path pickers (so grant/revoke aren't typed blind) ----------------
+pick_reach_path() {  # pick_reach_path <site> <rw|ro|all> "<title>" -> chosen path
+  local s="$1" which="$2" title="$3" p D="/etc/hardening/sites/$1"; local -a items=() files=()
+  case "$which" in rw) files=("$D/reach-rw.paths");; ro) files=("$D/reach-ro.paths");;
+                   *)  files=("$D/reach-rw.paths" "$D/reach-ro.paths");; esac
+  while IFS= read -r p; do [ -n "$p" ] && items+=("$p" "$p"); done < <(cat "${files[@]}" 2>/dev/null | awk '!seen[$0]++')
+  [ ${#items[@]} -eq 0 ] && { ui_msg "Nessun path attualmente concesso."; return 1; }
+  ui_menu "$title" "${items[@]}"
+}
+pick_grant_candidate() {  # pick_grant_candidate <site> "<VERB>" -> chosen path or __CUSTOM
+  local s="$1" verb="$2" docroot p D="/etc/hardening/sites/$1"; local -a items=()
+  docroot="$(meta_get "$s" DOCROOT)"
+  if [ -n "$docroot" ] && [ -d "$docroot" ]; then
+    while IFS= read -r p; do
+      [ -n "$p" ] || continue
+      grep -qxF "$p" "$D/reach-rw.paths" "$D/reach-ro.paths" 2>/dev/null && continue  # skip already granted
+      items+=("$p" "$p")
+    done < <(find "$docroot" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort)
+  fi
+  items+=("__CUSTOM" "Altro: digita un path personalizzato...")
+  ui_menu "$verb: scegli una cartella (del docroot, non ancora concessa) o 'Altro':" "${items[@]}"
+}
+
 mod_nginx() {  # mod_nginx <site> — domains (server_name+aliases) and enable/disable
   local s="$1" op cur en newv
   while true; do
@@ -220,22 +243,25 @@ $(egress_summary "$s")" \
   done
 }
 mod_dir() {  # mod_dir <site>
-  local s="$1" op p
+  local s="$1" op p verb act
   while true; do
     op="$(ui_menu "Directory di '$s':
 
 $(dir_summary "$s")" \
-      gwrite "Concedi SCRITTURA su un path" \
-      gread  "Concedi (sola) LETTURA su un path" \
-      revoke "REVOCA un path" \
+      gwrite "Concedi SCRITTURA su una cartella" \
+      gread  "Concedi (sola) LETTURA su una cartella" \
+      revoke "REVOCA un path (scegli dall'elenco attuale)" \
       back   "<< Indietro")" || return
     case "$op" in
-      gwrite) p="$(ui_input "Path da rendere SCRIVIBILE:" "/srv/${s}-shared")" || continue
-              [ -n "$p" ] && tune_apply "$s" grant-write "$p" ;;
-      gread)  p="$(ui_input "Path da rendere LEGGIBILE:" "/srv/${s}-ro")" || continue
-              [ -n "$p" ] && tune_apply "$s" grant-read "$p" ;;
-      revoke) p="$(ui_input "Path da REVOCARE:" "")" || continue
-              [ -n "$p" ] && tune_apply "$s" revoke "$p" ;;
+      gwrite|gread)
+        verb=SCRITTURA; act=grant-write
+        [ "$op" = gread ] && { verb=LETTURA; act=grant-read; }
+        p="$(pick_grant_candidate "$s" "$verb")" || continue
+        [ "$p" = "__CUSTOM" ] && { p="$(ui_input "Path assoluto da concedere in $verb:" "/srv/${s}-shared")" || continue; }
+        [ -n "$p" ] && tune_apply "$s" "$act" "$p" ;;
+      revoke)
+        p="$(pick_reach_path "$s" all "Quale path REVOCARE? (scegli tra quelli concessi ora)")" || continue
+        [ -n "$p" ] && tune_apply "$s" revoke "$p" ;;
       back)   return ;;
     esac
   done
