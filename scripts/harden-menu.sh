@@ -323,7 +323,7 @@ while true; do
     newvhost "Nuovo sito (personalizza TUTTI i parametri)" \
     enforce  "Enforce AppArmor di un sito (soak->enforce)" \
     tls      "HTTPS / TLS di un sito" \
-    tune     "Apri una destinazione di egress di un sito" \
+    modify   "Modifica un sito (egress, dir, PHP/pool, cookie, ...)" \
     denials  "Mostra i denial AppArmor di un sito" \
     e2e      "Esegui il test end-to-end (Tier-2)" \
     quit     "Esci")" || break
@@ -337,7 +337,7 @@ while true; do
     newvhost) action_newvhost ;;
     enforce)  action_site "$SCRIPTS/enforce-vhost.sh" ;;
     tls)      action_tls ;;
-    tune)     action_tune_allow ;;
+    modify)   action_modify ;;
     denials)  action_site "$SCRIPTS/show-aa-denials.sh" ;;
     e2e)      runscript "$TESTDIR/tier2-e2e.sh" ;;
     quit)     break ;;
