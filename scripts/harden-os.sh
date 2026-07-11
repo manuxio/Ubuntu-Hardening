@@ -21,6 +21,14 @@ CFG="$REPO/config"
 
 require_root
 
+# --- Preflight: these scripts install/harden via apt on Debian/Ubuntu ---------
+have_cmd apt-get || die "apt-get not found — harden-os.sh targets Debian/Ubuntu"
+. /etc/os-release 2>/dev/null || true
+case "${ID:-}" in
+  ubuntu|debian) : ;;
+  *) warn "untested OS '${ID:-unknown}' — these scripts are validated on Ubuntu 22.04" ;;
+esac
+
 prompt PHP_VERSION "PHP version to harden" "$(ls /etc/php 2>/dev/null | sort -V | tail -1 || echo 8.1)"
 prompt SSH_HARDEN  "Harden SSH (key-only, no root)? (yes/no)"  "no"
 prompt RUN_AIDEINIT "Build the AIDE baseline now (slow)? (yes/no)" "no"

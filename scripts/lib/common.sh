@@ -45,6 +45,20 @@ has_systemd() {
   [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1
 }
 
+# have_cmd NAME -> 0 if NAME is on PATH or is an executable in /usr/sbin:/sbin
+# (root's tools often live there and may be off a stripped PATH).
+have_cmd() {
+  command -v "$1" >/dev/null 2>&1 && return 0
+  local d; for d in /usr/sbin /sbin /usr/local/sbin; do [ -x "$d/$1" ] && return 0; done
+  return 1
+}
+
+# tcp_open HOST PORT [TIMEOUT] -> 0 if a TCP connection succeeds (non-fatal probe,
+# used for DB/mail reachability heads-ups). No external deps: bash /dev/tcp.
+tcp_open() {
+  timeout "${3:-2}" bash -c "exec 3<>/dev/tcp/$1/$2" >/dev/null 2>&1
+}
+
 # prompt VARNAME "Label" "default"
 #   env override wins; then TTY prompt; then default. Result is stored in VARNAME.
 prompt() {

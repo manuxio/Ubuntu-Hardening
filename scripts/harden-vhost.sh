@@ -58,6 +58,30 @@ HAT="/etc/apparmor.d/php-fpm.d/${SITE}"
 NGX_AVAIL="/etc/nginx/sites-available/${SITE}"
 NGX_ENABLED="/etc/nginx/sites-enabled/${SITE}"
 
+# --- Preflight ---------------------------------------------------------------
+# Fail FAST with an actionable message if a hard dependency is missing, instead
+# of aborting mid-run on `php-fpm -t`. A missing database is only a heads-up: it
+# may be provisioned later, and harden-vhost only opens egress toward it.
+preflight() {
+  local miss=()
+  have_cmd nginx || miss+=("nginx")
+  have_cmd "php-fpm${PHP_VERSION}" || miss+=("php${PHP_VERSION}-fpm")
+  if [ "${#miss[@]}" -gt 0 ]; then
+    die "missing required tool(s): ${miss[*]} — run scripts/harden-os.sh first (or: apt-get install ${miss[*]})"
+  fi
+  if [ "${ENABLE_APPARMOR_HAT:-0}" = "1" ] && ! is_container && ! have_cmd apparmor_parser; then
+    warn "apparmor_parser not found -> the AppArmor hat won't attach (apt-get install apparmor apparmor-utils)"
+  fi
+  if [ -n "${DB_HOST:-}" ] && [ -n "${DB_PORT:-}" ]; then
+    if tcp_open "$DB_HOST" "$DB_PORT" 2; then
+      info "database reachable at ${DB_HOST}:${DB_PORT}"
+    else
+      warn "nothing answering at ${DB_HOST}:${DB_PORT} -> egress will be allowed, but the site errors until the DB is up"
+    fi
+  fi
+}
+preflight
+
 log "Site '$SITE' -> docroot $DOCROOT, runtime user $RUNTIME_USER (PHP $PHP_VERSION)"
 
 # --- Validate docroot --------------------------------------------------------
