@@ -89,17 +89,26 @@ runscript() {  # runscript <path> [args...]
 }
 
 # --- composite actions that need parameters ----------------------------------
-action_tls() {
-  local s mode email; s="$(pick_site)" || return; [ -n "$s" ] || return
-  mode="$(ui_menu "Tipo di certificato per $s:" \
-            self "Self-signed (staging/test)" \
-            le   "Let's Encrypt (produzione)")" || return
-  if [ "$mode" = le ]; then
-    email="$(ui_input "Email per Let's Encrypt:" "")" || return
-    runscript "$SCRIPTS/setup-tls.sh" "$s" --letsencrypt --email "$email"
+# Enable TLS on a site in a chosen HTTP/HTTPS mode, then a chosen cert type.
+run_tls_for() {  # run_tls_for <site> <http+https|https>
+  local s="$1" mode="$2" ct email both=""
+  [ "$mode" = "http+https" ] && both="--both"
+  ct="$(ui_menu "Certificato per $s (modalita: $mode):" \
+        self "Self-signed (staging / test)" \
+        le   "Let's Encrypt (produzione, richiede DNS pubblico)")" || return 1
+  if [ "$ct" = le ]; then
+    email="$(ui_input "Email per Let's Encrypt:" "")" || return 1
+    runscript "$SCRIPTS/setup-tls.sh" "$s" --letsencrypt --email "$email" $both
   else
-    runscript "$SCRIPTS/setup-tls.sh" "$s" --self-signed
+    runscript "$SCRIPTS/setup-tls.sh" "$s" --self-signed $both
   fi
+}
+action_tls() {
+  local s mode; s="$(pick_site)" || return; [ -n "$s" ] || return
+  mode="$(ui_menu "Come servire '$s'?" \
+    "http+https" "HTTP e HTTPS entrambi attivi (nessun redirect)" \
+    "https"      "Solo HTTPS (HTTP -> redirect 301)")" || return
+  run_tls_for "$s" "$mode"
 }
 # Apply a tune-vhost change, but offer a dry-run preview first (fail-safe).
 tune_apply() {  # tune_apply <site> <tune-vhost args...>
@@ -180,14 +189,52 @@ action_site() {  # action_site <script> [extra args after site]
   runscript "$script" "$s" "$@"
 }
 
-# Create a new vhost with FULL parameter customization: a review menu of every
-# harden-vhost parameter (identity, paths, DB, mail, PHP/pool tunables); edit any,
-# then CREATE. All values are exported so harden-vhost runs non-interactively.
+# New-site creation as a GROUPED form (Nginx / File System / PHP / Network).
+# _edit_field and _edit_group use bash dynamic scope: called from action_newvhost
+# they read and modify its local parameter variables by name.
+_edit_field() {  # _edit_field <VARNAME>
+  local v="$1" newv
+  case "$v" in
+    SITE)
+      newv="$(ui_input "Nome breve del sito:" "$SITE")" || return
+      if [ -n "$newv" ]; then
+        SITE="$newv"; SERVER_NAME="${SITE}.local"; DOCROOT="/var/www/html/${SITE}/public_html"
+        RUNTIME_USER="$SITE"; TMP_PATH="/var/www/html/${SITE}/tmp"
+        SESSION_PATH="/var/www/html/${SITE}/sessions"; LOG_PATH="/var/www/html/${SITE}/logs"
+      fi ;;
+    SERVER_NAME)
+      newv="$(ui_input "Domini separati da spazio: il 1o e' il principale, gli altri gli alias (es: www.xxx.com xxx.com). Vanno in nginx server_name e nei certificati TLS." "$SERVER_NAME")" || return
+      [ -n "$newv" ] && SERVER_NAME="$newv" ;;
+    TLS_MODE)
+      newv="$(ui_menu "Come servire il sito?" \
+        http        "Solo HTTP (nessun TLS)" \
+        "http+https" "HTTP e HTTPS entrambi (nessun redirect)" \
+        https       "Solo HTTPS (HTTP -> redirect 301)")" || return
+      [ -n "$newv" ] && TLS_MODE="$newv" ;;
+    *) newv="$(ui_input "$v:" "${!v}")" || return; printf -v "$v" '%s' "$newv" ;;
+  esac
+}
+_edit_group() {  # _edit_group "Title" VAR "Label" VAR "Label" ...
+  local title="$1"; shift
+  local -a spec=("$@")
+  local -a items; local i var lab sel
+  while true; do
+    items=()
+    for ((i=0; i<${#spec[@]}; i+=2)); do
+      var="${spec[i]}"; lab="${spec[i+1]}"
+      items+=("$var" "$(printf '%-20s = %s' "$lab" "${!var}")")
+    done
+    items+=("__BACK" "<< Indietro")
+    sel="$(ui_menu "$title — modifica un campo:" "${items[@]}")" || return
+    [ "$sel" = "__BACK" ] && return
+    _edit_field "$sel"
+  done
+}
 action_newvhost() {
   local SITE SERVER_NAME DOCROOT RUNTIME_USER WEB_USER PHP_VERSION WRITABLE_DIRS
   local TMP_PATH SESSION_PATH LOG_PATH DB_HOST DB_PORT MAIL_HOST MAIL_PORTS
   local ALLOW_HTTPS COOKIE_SECURE PM_MAX_CHILDREN PM_MAX_REQUESTS MEMORY_LIMIT
-  local UPLOAD_MAX_FILESIZE POST_MAX_SIZE MAX_EXECUTION_TIME ASSUME_YES sel newv cur
+  local UPLOAD_MAX_FILESIZE POST_MAX_SIZE MAX_EXECUTION_TIME TLS_MODE ASSUME_YES sel
   SITE="$(ui_input "Nome breve del nuovo sito (pool/hat/utente):" "web_user")" || return
   [ -n "$SITE" ] || return
   # defaults (mirror harden-vhost.sh), derived from SITE
@@ -197,55 +244,40 @@ action_newvhost() {
   TMP_PATH="/var/www/html/${SITE}/tmp"; SESSION_PATH="/var/www/html/${SITE}/sessions"
   LOG_PATH="/var/www/html/${SITE}/logs"
   DB_HOST="127.0.0.1"; DB_PORT="3306"; MAIL_HOST=""; MAIL_PORTS="25,465,587"
-  ALLOW_HTTPS="yes"; COOKIE_SECURE="off"
+  ALLOW_HTTPS="yes"; COOKIE_SECURE="off"; TLS_MODE="http"
   PM_MAX_CHILDREN="10"; PM_MAX_REQUESTS="500"; MEMORY_LIMIT="256M"
   UPLOAD_MAX_FILESIZE="32M"; POST_MAX_SIZE="32M"; MAX_EXECUTION_TIME="60"
   while true; do
-    sel="$(ui_menu "Nuovo sito '$SITE' — rivedi/modifica, poi CREA:" \
-      SITE                "Nome sito             = $SITE" \
-      SERVER_NAME         "Domini (nginx + cert) = $SERVER_NAME" \
-      DOCROOT             "Docroot               = $DOCROOT" \
-      RUNTIME_USER        "Utente runtime        = $RUNTIME_USER" \
-      WEB_USER            "Identita codice/FTP   = $WEB_USER" \
-      PHP_VERSION         "Versione PHP          = $PHP_VERSION" \
-      WRITABLE_DIRS       "Dir scrivibili        = $WRITABLE_DIRS" \
-      TMP_PATH            "Temp path             = $TMP_PATH" \
-      SESSION_PATH        "Session path          = $SESSION_PATH" \
-      LOG_PATH            "Log path              = $LOG_PATH" \
-      DB_HOST             "DB host (egress)      = $DB_HOST" \
-      DB_PORT             "DB port               = $DB_PORT" \
-      MAIL_HOST           "SMTP relay (vuoto=no) = $MAIL_HOST" \
-      MAIL_PORTS          "SMTP porte            = $MAIL_PORTS" \
-      ALLOW_HTTPS         "Egress 443 (yes/no)   = $ALLOW_HTTPS" \
-      COOKIE_SECURE       "cookie_secure (on/off)= $COOKIE_SECURE" \
-      PM_MAX_CHILDREN     "pm.max_children       = $PM_MAX_CHILDREN" \
-      PM_MAX_REQUESTS     "pm.max_requests       = $PM_MAX_REQUESTS" \
-      MEMORY_LIMIT        "memory_limit          = $MEMORY_LIMIT" \
-      UPLOAD_MAX_FILESIZE "upload_max_filesize   = $UPLOAD_MAX_FILESIZE" \
-      POST_MAX_SIZE       "post_max_size         = $POST_MAX_SIZE" \
-      MAX_EXECUTION_TIME  "max_execution_time    = $MAX_EXECUTION_TIME" \
-      __CREATE            ">>> CREA IL SITO <<<" \
-      __CANCEL            "Annulla")" || return
+    sel="$(ui_menu "Nuovo sito '$SITE' — configura per gruppi, poi CREA:" \
+      g_nginx  "Nginx / dominio     (server_name, HTTP/HTTPS)" \
+      g_fs     "File System         (docroot, utenti, dir, path)" \
+      g_php    "PHP / Pool          (versione, memoria, limiti, workers)" \
+      g_net    "Rete / DB / Mail    (DB, SMTP, egress, cookie)" \
+      __CREATE ">>> CREA IL SITO (modalita: $TLS_MODE) <<<" \
+      __CANCEL "Annulla")" || return
     case "$sel" in
       __CANCEL) return ;;
       __CREATE) break ;;
-      SITE)
-        newv="$(ui_input "Nome sito:" "$SITE")" || continue
-        if [ -n "$newv" ]; then
-          SITE="$newv"; SERVER_NAME="${SITE}.local"; DOCROOT="/var/www/html/${SITE}/public_html"
-          RUNTIME_USER="$SITE"; TMP_PATH="/var/www/html/${SITE}/tmp"
-          SESSION_PATH="/var/www/html/${SITE}/sessions"; LOG_PATH="/var/www/html/${SITE}/logs"
-        fi ;;
-      SERVER_NAME)
-        newv="$(ui_input "Domini del sito separati da spazio: il 1o e' il principale, gli altri gli alias (es: www.xxx.com xxx.com). Vanno in nginx server_name e nei certificati TLS." "$SERVER_NAME")" || continue
-        [ -n "$newv" ] && SERVER_NAME="$newv" ;;
-      *) cur="${!sel}"; newv="$(ui_input "$sel:" "$cur")" || continue
-         printf -v "$sel" '%s' "$newv" ;;
+      g_nginx) _edit_group "Nginx / dominio" \
+                 SITE "Nome sito" SERVER_NAME "Domini" TLS_MODE "Modalita HTTP/HTTPS" ;;
+      g_fs)    _edit_group "File System" \
+                 DOCROOT "Docroot" RUNTIME_USER "Utente runtime" WEB_USER "Identita codice" \
+                 WRITABLE_DIRS "Dir scrivibili" TMP_PATH "Temp path" \
+                 SESSION_PATH "Session path" LOG_PATH "Log path" ;;
+      g_php)   _edit_group "PHP / Pool" \
+                 PHP_VERSION "Versione PHP" MEMORY_LIMIT "memory_limit" \
+                 UPLOAD_MAX_FILESIZE "upload_max" POST_MAX_SIZE "post_max_size" \
+                 MAX_EXECUTION_TIME "max_exec_time" PM_MAX_CHILDREN "pm.max_children" \
+                 PM_MAX_REQUESTS "pm.max_requests" ;;
+      g_net)   _edit_group "Rete / DB / Mail" \
+                 DB_HOST "DB host" DB_PORT "DB port" MAIL_HOST "SMTP relay" \
+                 MAIL_PORTS "SMTP porte" ALLOW_HTTPS "Egress 443" COOKIE_SECURE "cookie_secure" ;;
     esac
   done
   ui_yesno "Creare il sito '$SITE'?
 
-  utente=$RUNTIME_USER   PHP=$PHP_VERSION
+  utente=$RUNTIME_USER   PHP=$PHP_VERSION   modalita=$TLS_MODE
+  domini=$SERVER_NAME
   docroot=$DOCROOT
   DB=$DB_HOST:$DB_PORT   egress443=$ALLOW_HTTPS" || return
   export SITE SERVER_NAME DOCROOT RUNTIME_USER WEB_USER PHP_VERSION WRITABLE_DIRS \
@@ -253,6 +285,14 @@ action_newvhost() {
          ALLOW_HTTPS COOKIE_SECURE PM_MAX_CHILDREN PM_MAX_REQUESTS MEMORY_LIMIT \
          UPLOAD_MAX_FILESIZE POST_MAX_SIZE MAX_EXECUTION_TIME ASSUME_YES=1
   runscript "$SCRIPTS/harden-vhost.sh"
+  # apply the chosen HTTP/HTTPS mode (http => nothing else to do)
+  if [ "$TLS_MODE" != http ]; then
+    if [ -f "/etc/php/${PHP_VERSION}/fpm/pool.d/${SITE}.conf" ]; then
+      run_tls_for "$SITE" "$TLS_MODE"
+    else
+      ui_msg "Creazione non riuscita: salto la configurazione TLS."
+    fi
+  fi
 }
 
 # --- self-test (non-interactive) ---------------------------------------------

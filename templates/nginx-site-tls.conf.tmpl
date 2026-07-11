@@ -13,7 +13,8 @@ server {
     # Let's Encrypt http-01 challenge stays on plain HTTP.
     location ^~ /.well-known/acme-challenge/ { root @@DOCROOT@@; default_type "text/plain"; allow all; }
 
-    location / { return 301 https://$host$request_uri; }
+    # Either a redirect to HTTPS ("https" mode) or the app itself ("http+https").
+    @@PORT80_LOCATION@@
 }
 
 server {

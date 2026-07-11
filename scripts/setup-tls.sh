@@ -23,13 +23,14 @@ SITE="${1:-}"; shift || true
 [ -n "$SITE" ] || die "usage: setup-tls.sh <SITE> [--self-signed | --letsencrypt --email X [--staging]]"
 policy_site_exists "$SITE" || die "unknown site '$SITE' (run harden-vhost.sh first)"
 
-MODE="self-signed"; EMAIL=""; STAGING=""
+MODE="self-signed"; EMAIL=""; STAGING=""; HTTP_MODE="redirect"
 while [ $# -gt 0 ]; do
   case "$1" in
     --self-signed) MODE=self-signed ;;
     --letsencrypt) MODE=letsencrypt ;;
     --email)       EMAIL="${2:?}"; shift ;;
     --staging)     STAGING="--staging" ;;
+    --both)        HTTP_MODE="both" ;;   # serve plain HTTP too (no redirect to HTTPS)
     *) die "unknown option: $1" ;;
   esac; shift
 done
@@ -76,22 +77,39 @@ else
   info "auto-renewal: certbot.timer active; deploy-hook reloads nginx"
 fi
 
+# --- port-80 behaviour: redirect ("https") or serve the app ("http+https") ---
+if [ "$HTTP_MODE" = both ]; then
+  PORT80_LOCATION="include /etc/nginx/snippets/${SITE}-app.conf;"
+  HSTS='# HSTS omitted (http+https mode also serves plain HTTP)'
+else
+  PORT80_LOCATION='location / { return 301 https://$host$request_uri; }'
+fi
+
 # --- render the HTTPS server block + reload ---------------------------------
-log "rendering HTTPS server block -> $NGX_AVAIL"
+log "rendering HTTPS server block ($HTTP_MODE) -> $NGX_AVAIL"
 render_template "$TPL/nginx-site-tls.conf.tmpl" "$NGX_AVAIL" \
-  SITE SERVER_NAME DOCROOT TLS_CERT TLS_KEY HSTS
+  SITE SERVER_NAME DOCROOT TLS_CERT TLS_KEY HSTS PORT80_LOCATION
 ln -sfn "$NGX_AVAIL" "/etc/nginx/sites-enabled/${SITE}"
 nginx -t
 reload_service nginx
 
-# --- flip session.cookie_secure on (now that TLS is live) -------------------
-bash "$SELF/tune-vhost.sh" "$SITE" tls-on >/dev/null 2>&1 || warn "could not flip cookie_secure (do: tune-vhost.sh $SITE tls-on)"
+# --- flip session.cookie_secure on — ONLY when HTTP redirects to HTTPS. In
+# http+https mode plain HTTP is still served, so a secure-only cookie would drop
+# the session over HTTP; leave it as configured.
+if [ "$HTTP_MODE" = redirect ]; then
+  bash "$SELF/tune-vhost.sh" "$SITE" tls-on >/dev/null 2>&1 || warn "could not flip cookie_secure (do: tune-vhost.sh $SITE tls-on)"
+  COOKIE_NOTE="    session.cookie_secure -> on"
+  HTTP_NOTE="    https://${PRIMARY}/    (HTTP now 301-redirects here)"
+else
+  COOKIE_NOTE="    session.cookie_secure left as-is (HTTP still served)"
+  HTTP_NOTE="    http://${PRIMARY}/  and  https://${PRIMARY}/   (both served, no redirect)"
+fi
 
 cat <<EOF
 
-$(log "TLS enabled for '$SITE' ($MODE).")
-    https://${PRIMARY}/    (HTTP now 301-redirects here)
-    session.cookie_secure -> on
+$(log "TLS enabled for '$SITE' ($MODE, $HTTP_MODE).")
+$HTTP_NOTE
+$COOKIE_NOTE
 $( [ "$MODE" = self-signed ] && echo "    NOTE: self-signed -> browser warning; use --letsencrypt for a trusted cert." )
 $( [ "$MODE" = letsencrypt ] && echo "    Renewal: certbot renews automatically and reloads nginx (deploy-hook)." )
 EOF
