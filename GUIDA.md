@@ -259,7 +259,7 @@ passaggio a enforce.
 │           AppArmor: mostra i denial del soak                                 │
 │           Verifica isolamento del sito                                       │
 │           Scansione malware del docroot (YARA-X)                             │
-│           Deploy pagina di test PHP                                          │
+│           Test PHP: deploy / elimina pagina di test                          │
 │           Aggiorna config (applica gli ultimi template)                      │
 │           Mostra tutta la policy del sito                                    │
 │           DISTRUGGI il sito (rimuove config, NON i dati)                     │
@@ -389,10 +389,10 @@ raccolti nel soak** (sconsigliato, indebolisce il modello):
 Le altre voci del menu di gestione: **HTTPS/TLS** (self-signed o Let's Encrypt),
 **Cookie sicuri**, **AppArmor Enforce** (soak→enforce con rollback automatico),
 **AppArmor denial** (mostra le negazioni del soak), **Aggiorna config**
-(riapplica gli ultimi template), **Deploy pagina di test**, e **DISTRUGGI**
+(riapplica gli ultimi template), **Test PHP** (deploy/elimina la pagina di test), e **DISTRUGGI**
 (rimuove la configurazione ma **non** i dati sul disco).
 
-> **Deploy pagina di test** installa *due* file: la pagina diagnostica nel
+> **Test PHP → Deploy** installa *due* file: la pagina diagnostica nel
 > docroot (deve essere servita, 200) **e** una piccola probe `.php` in una
 > cartella scrivibile (es. `images/`), dove nginx deve **rifiutare** l'esecuzione
 > PHP → quella URL deve dare **403**. Lo script lo verifica da solo e stampa
@@ -448,7 +448,7 @@ Con un secondo sito configurato, la prova diventa **incrociata nei due sensi**.
 > test** che deployiamo di proposito, contiene `system()` alimentato da input
 > HTTP per verificare `disable_functions` — quindi fa scattare la regola
 > "comando da input HTTP". È un vero positivo *atteso*: rimuovi la pagina di test
-> dopo l'uso (voce **Deploy pagina di test** → rimuovi, oppure
+> dopo l'uso (voce **Test PHP → Elimina**, oppure
 > `scripts/deploy-test.sh <sito> --remove`).
 
 **Mostra tutta la policy del sito** — riepilogo unico di open_basedir, cartelle
@@ -806,7 +806,7 @@ Pagina PHP autonoma con GUI (**"by manux4CONINET"**) che verifica dal vivo se la
 configurazione del pool è solida. Uso **temporaneo**:
 
 1. Carica `tools/hardening-check.php` nel docroot via FTP/SFTP (o dal menu
-   **Deploy pagina di test**).
+   **Test PHP → Deploy**; per rimuoverla, **Test PHP → Elimina**).
 2. Aprila nel browser → report a colori con verdetto (`HARDENED` / `REVIEW` /
    `FAIL`). Output JSON per automazioni: `…/hardening-check.php?format=json`.
    Test DB opzionale: `?db_host=…&db_user=…&db_pass=…&db_name=…`.
@@ -921,7 +921,7 @@ promemoria generale.
   livello nginx: la regione `hardening:nophp` nega l'esecuzione `.php` in ogni
   dir scrivibile sotto il docroot, rigenerata da `reach_rebuild` ad ogni
   `grant-write` (quindi non serve elencarle a mano e non driftano). Verifica con
-  "Deploy pagina di test": la probe in `images/` deve dare **403**.
+  **Test PHP → Deploy**: la probe in `images/` deve dare **403**.
 - **`ReadWritePaths` richiede un RESTART, non un reload.** Il namespace di
   `ProtectSystem=strict` è costruito all'avvio dell'unità: aggiungere una
   cartella a `ReadWritePaths` + `daemon-reload` **non** la rende scrivibile per il

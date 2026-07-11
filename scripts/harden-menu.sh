@@ -410,6 +410,25 @@ action_revoke_permit() {  # <site> — pick a granted permit and remove it
 # "Modify a site" — a grouped menu (Egress / Directory / PHP / TLS). Each group
 # is a submenu that STAYS OPEN after a change and shows the current state, so you
 # can make several edits without dropping back to the top. Drives tune-vhost.sh.
+mod_testpage() {  # mod_testpage <site> — deploy / remove the PHP self-test page
+  local s="$1" op
+  while true; do
+    op="$(ui_menu "Test PHP di '$s':
+
+La pagina 'hardening-check.php' verifica dal vivo la postura di hardening
+(identita', disable_functions, open_basedir, egress, AppArmor, e i test
+'Webshell drop': scrittura .php nelle cartelle scrivibili + 403 nginx).
+Ricordati di ELIMINARLA dopo l'uso." \
+      deploy "Deploy pagina di test PHP" \
+      remove "Elimina pagina di test PHP" \
+      back   "<< Indietro")" || return
+    case "$op" in
+      deploy) runscript "$SCRIPTS/deploy-test.sh" "$s" ;;
+      remove) runscript "$SCRIPTS/deploy-test.sh" "$s" --remove ;;
+      back)   return ;;
+    esac
+  done
+}
 action_modify() {  # "Gestisci siti" — pick a site, then every per-site operation
   local s g
   s="$(pick_site)" || return; [ -n "$s" ] || return
@@ -426,7 +445,7 @@ action_modify() {  # "Gestisci siti" — pick a site, then every per-site operat
       denials "AppArmor: mostra i denial del soak" \
       probe   "Verifica isolamento del sito" \
       malware "Scansione malware del docroot (YARA-X)" \
-      test    "Deploy pagina di test PHP" \
+      test    "Test PHP: deploy / elimina pagina di test" \
       refresh "Aggiorna config (applica gli ultimi template)" \
       show    "Mostra tutta la policy del sito" \
       destroy "DISTRUGGI il sito (rimuove config, NON i dati)" \
@@ -443,7 +462,7 @@ action_modify() {  # "Gestisci siti" — pick a site, then every per-site operat
       denials) runscript "$SCRIPTS/show-aa-denials.sh" "$s" ;;
       probe)   runscript "$SCRIPTS/probe-vhost.sh" "$s" ;;
       malware) runscript "$SCRIPTS/scan-malware.sh" "$s" ;;
-      test)    runscript "$SCRIPTS/deploy-test.sh" "$s" ;;
+      test)    mod_testpage "$s" ;;
       refresh) runscript "$SCRIPTS/refresh-vhost.sh" "$s" ;;
       show)    runscript "$SCRIPTS/tune-vhost.sh" "$s" show ;;
       destroy) runscript "$SCRIPTS/destroy-vhost.sh" "$s"
