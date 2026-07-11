@@ -14,7 +14,9 @@
 #   tune-vhost.sh <SITE> grant-write <path>
 #   tune-vhost.sh <SITE> grant-read  <path>
 #   tune-vhost.sh <SITE> revoke      <path>
-#   tune-vhost.sh <SITE> set   <key> <value>      # memory_limit, MemoryMax, allow_url_fopen, ...
+#   tune-vhost.sh <SITE> set   <key> <value>      # memory_limit, upload_max_filesize,
+#                                                 # allow_url_fopen, MemoryMax, CPUQuota,
+#                                                 # pm.max_children, pm.max_requests, ...
 #   tune-vhost.sh <SITE> disable <func> | enable <func>
 #   tune-vhost.sh <SITE> tls-on | tls-off
 #   tune-vhost.sh <SITE> show
@@ -92,6 +94,14 @@ case "$ACTION" in
           t="$(mktemp)"; grep -vE "^${key}=" "$LIMITS_DROPIN" > "$t" || true
           printf '%s=%s\n' "$key" "$val" >> "$t"; mv "$t" "$LIMITS_DROPIN"
           has_systemd && systemctl daemon-reload 2>/dev/null || true
+          reload_service "php${PHP_VERSION}-fpm"
+        fi ;;
+      pm|pm.max_children|pm.max_requests|pm.start_servers|pm.min_spare_servers|pm.max_spare_servers)
+        log "pool $SITE: $key = $val   (process-manager directive)"
+        if [ $DRY -eq 0 ]; then
+          kre="${key//./\\.}"; t="$(mktemp)"
+          grep -vE "^${kre}[[:space:]]*=" "$POOL" > "$t" || true
+          printf '%s = %s\n' "$key" "$val" >> "$t"; mv "$t" "$POOL"
           reload_service "php${PHP_VERSION}-fpm"
         fi ;;
       *) die "unknown key '$key'" ;;

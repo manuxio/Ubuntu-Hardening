@@ -157,6 +157,8 @@ action_modify() {
           allow_url_fopen     "PHP allow_url_fopen (on/off)" \
           display_errors      "PHP display_errors (on/off)" \
           expose_php          "PHP expose_php (on/off)" \
+          pm.max_children     "pool pm.max_children (worker max)" \
+          pm.max_requests     "pool pm.max_requests (ricicla worker)" \
           MemoryMax           "cgroup MemoryMax (es. 512M)" \
           CPUQuota            "cgroup CPUQuota (es. 50%)" \
           TasksMax            "cgroup TasksMax (es. 100)")" || continue
@@ -176,6 +178,78 @@ action_site() {  # action_site <script> [extra args after site]
   local script="$1"; shift
   local s; s="$(pick_site)" || return; [ -n "$s" ] || return
   runscript "$script" "$s" "$@"
+}
+
+# Create a new vhost with FULL parameter customization: a review menu of every
+# harden-vhost parameter (identity, paths, DB, mail, PHP/pool tunables); edit any,
+# then CREATE. All values are exported so harden-vhost runs non-interactively.
+action_newvhost() {
+  local SITE SERVER_NAME DOCROOT RUNTIME_USER WEB_USER PHP_VERSION WRITABLE_DIRS
+  local TMP_PATH SESSION_PATH LOG_PATH DB_HOST DB_PORT MAIL_HOST MAIL_PORTS
+  local ALLOW_HTTPS COOKIE_SECURE PM_MAX_CHILDREN PM_MAX_REQUESTS MEMORY_LIMIT
+  local UPLOAD_MAX_FILESIZE POST_MAX_SIZE MAX_EXECUTION_TIME ASSUME_YES sel newv cur
+  SITE="$(ui_input "Nome breve del nuovo sito (pool/hat/utente):" "web_user")" || return
+  [ -n "$SITE" ] || return
+  # defaults (mirror harden-vhost.sh), derived from SITE
+  SERVER_NAME="${SITE}.local"; DOCROOT="/var/www/html/${SITE}/public_html"
+  RUNTIME_USER="$SITE"; WEB_USER="www-data"; PHP_VERSION="8.1"
+  WRITABLE_DIRS="images media cache administrator/cache"
+  TMP_PATH="/var/www/html/${SITE}/tmp"; SESSION_PATH="/var/www/html/${SITE}/sessions"
+  LOG_PATH="/var/www/html/${SITE}/logs"
+  DB_HOST="127.0.0.1"; DB_PORT="3306"; MAIL_HOST=""; MAIL_PORTS="25,465,587"
+  ALLOW_HTTPS="yes"; COOKIE_SECURE="off"
+  PM_MAX_CHILDREN="10"; PM_MAX_REQUESTS="500"; MEMORY_LIMIT="256M"
+  UPLOAD_MAX_FILESIZE="32M"; POST_MAX_SIZE="32M"; MAX_EXECUTION_TIME="60"
+  while true; do
+    sel="$(ui_menu "Nuovo sito '$SITE' — rivedi/modifica, poi CREA:" \
+      SITE                "Nome sito             = $SITE" \
+      SERVER_NAME         "server_name (nginx)   = $SERVER_NAME" \
+      DOCROOT             "Docroot               = $DOCROOT" \
+      RUNTIME_USER        "Utente runtime        = $RUNTIME_USER" \
+      WEB_USER            "Identita codice/FTP   = $WEB_USER" \
+      PHP_VERSION         "Versione PHP          = $PHP_VERSION" \
+      WRITABLE_DIRS       "Dir scrivibili        = $WRITABLE_DIRS" \
+      TMP_PATH            "Temp path             = $TMP_PATH" \
+      SESSION_PATH        "Session path          = $SESSION_PATH" \
+      LOG_PATH            "Log path              = $LOG_PATH" \
+      DB_HOST             "DB host (egress)      = $DB_HOST" \
+      DB_PORT             "DB port               = $DB_PORT" \
+      MAIL_HOST           "SMTP relay (vuoto=no) = $MAIL_HOST" \
+      MAIL_PORTS          "SMTP porte            = $MAIL_PORTS" \
+      ALLOW_HTTPS         "Egress 443 (yes/no)   = $ALLOW_HTTPS" \
+      COOKIE_SECURE       "cookie_secure (on/off)= $COOKIE_SECURE" \
+      PM_MAX_CHILDREN     "pm.max_children       = $PM_MAX_CHILDREN" \
+      PM_MAX_REQUESTS     "pm.max_requests       = $PM_MAX_REQUESTS" \
+      MEMORY_LIMIT        "memory_limit          = $MEMORY_LIMIT" \
+      UPLOAD_MAX_FILESIZE "upload_max_filesize   = $UPLOAD_MAX_FILESIZE" \
+      POST_MAX_SIZE       "post_max_size         = $POST_MAX_SIZE" \
+      MAX_EXECUTION_TIME  "max_execution_time    = $MAX_EXECUTION_TIME" \
+      __CREATE            ">>> CREA IL SITO <<<" \
+      __CANCEL            "Annulla")" || return
+    case "$sel" in
+      __CANCEL) return ;;
+      __CREATE) break ;;
+      SITE)
+        newv="$(ui_input "Nome sito:" "$SITE")" || continue
+        if [ -n "$newv" ]; then
+          SITE="$newv"; SERVER_NAME="${SITE}.local"; DOCROOT="/var/www/html/${SITE}/public_html"
+          RUNTIME_USER="$SITE"; TMP_PATH="/var/www/html/${SITE}/tmp"
+          SESSION_PATH="/var/www/html/${SITE}/sessions"; LOG_PATH="/var/www/html/${SITE}/logs"
+        fi ;;
+      *) cur="${!sel}"; newv="$(ui_input "$sel:" "$cur")" || continue
+         printf -v "$sel" '%s' "$newv" ;;
+    esac
+  done
+  ui_yesno "Creare il sito '$SITE'?
+
+  utente=$RUNTIME_USER   PHP=$PHP_VERSION
+  docroot=$DOCROOT
+  DB=$DB_HOST:$DB_PORT   egress443=$ALLOW_HTTPS" || return
+  export SITE SERVER_NAME DOCROOT RUNTIME_USER WEB_USER PHP_VERSION WRITABLE_DIRS \
+         TMP_PATH SESSION_PATH LOG_PATH DB_HOST DB_PORT MAIL_HOST MAIL_PORTS \
+         ALLOW_HTTPS COOKIE_SECURE PM_MAX_CHILDREN PM_MAX_REQUESTS MEMORY_LIMIT \
+         UPLOAD_MAX_FILESIZE POST_MAX_SIZE MAX_EXECUTION_TIME ASSUME_YES=1
+  runscript "$SCRIPTS/harden-vhost.sh"
 }
 
 # --- self-test (non-interactive) ---------------------------------------------
@@ -203,7 +277,7 @@ while true; do
     verify   "Audit: verifica + delta (Lynis)" \
     cve      "Scan CVE dei pacchetti (Trivy)" \
     cis      "Audit conformità CIS (OpenSCAP)" \
-    newvhost "Nuovo virtual host (utente+pool+hat+egress)" \
+    newvhost "Nuovo sito (personalizza TUTTI i parametri)" \
     enforce  "Enforce AppArmor di un sito (soak->enforce)" \
     tls      "HTTPS / TLS di un sito" \
     tune     "Apri una destinazione di egress di un sito" \
@@ -217,7 +291,7 @@ while true; do
     verify)   runscript "$SCRIPTS/audit-os.sh" --verify ;;
     cve)      runscript "$SCRIPTS/scan-cve.sh" ;;
     cis)      runscript "$SCRIPTS/audit-cis.sh" ;;
-    newvhost) runscript "$SCRIPTS/harden-vhost.sh" ;;
+    newvhost) action_newvhost ;;
     enforce)  action_site "$SCRIPTS/enforce-vhost.sh" ;;
     tls)      action_tls ;;
     tune)     action_tune_allow ;;
