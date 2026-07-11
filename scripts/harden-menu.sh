@@ -51,11 +51,12 @@ ui_input() {  # ui_input "prompt" "default"  -> echoes value
   fi
   printf '%s [%s]: ' "$prompt" "$def" >&2; local v; read -r v || return 1; echo "${v:-$def}"
 }
-ui_msg() {  # ui_msg "text"
-  if [ "$UI" = whiptail ]; then whiptail --title "$TITLE" --msgbox "$1" 12 70; else echo "-- $1" >&2; fi
+ui_msg() {  # ui_msg "text" — fd swap so the box shows on the terminal even when
+            # the caller runs inside $(...) (e.g. pick_site), not into the capture
+  if [ "$UI" = whiptail ]; then whiptail --title "$TITLE" --msgbox "$1" 12 70 3>&1 1>&2 2>&3; else echo "-- $1" >&2; fi
 }
 ui_yesno() {  # ui_yesno "prompt" -> 0 yes / 1 no
-  if [ "$UI" = whiptail ]; then whiptail --title "$TITLE" --yesno "$1" 14 72; return $?; fi
+  if [ "$UI" = whiptail ]; then whiptail --title "$TITLE" --yesno "$1" 14 72 3>&1 1>&2 2>&3; return $?; fi
   printf '%s [s/N]: ' "$1" >&2; local a; read -r a || return 1
   case "$a" in s|S|y|Y) return 0 ;; *) return 1 ;; esac
 }
@@ -74,7 +75,7 @@ pick_site() {  # echoes chosen site, or returns 1
   local -a pairs=(); local s
   while read -r s; do [ -n "$s" ] && pairs+=("$s" "$s"); done < <(list_sites)
   if [ ${#pairs[@]} -eq 0 ]; then
-    ui_msg "Nessun sito configurato. Usa prima 'Nuovo virtual host'."; return 1
+    ui_msg "Nessun sito configurato. Crea prima un sito con 'Nuovo sito'."; return 1
   fi
   ui_menu "Scegli il sito:" "${pairs[@]}"
 }
