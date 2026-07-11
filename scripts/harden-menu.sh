@@ -110,6 +110,26 @@ action_tls() {
     "https"      "Solo HTTPS (HTTP -> redirect 301)")" || return
   run_tls_for "$s" "$mode"
 }
+# Read the CURRENT value of a per-site setting (pool directive or systemd cap),
+# so the modify dialogs can show and pre-fill it.
+pool_get() {  # pool_get <site> <key>
+  local s="$1" k="$2" pool ver drop val
+  pool="$(ls /etc/php/*/fpm/pool.d/${s}.conf 2>/dev/null | head -1)"
+  [ -n "$pool" ] || return 0
+  ver="$(printf '%s' "$pool" | sed -nE 's#/etc/php/([^/]+)/.*#\1#p')"
+  drop="/etc/systemd/system/php${ver}-fpm.service.d/${s}-limits.conf"
+  case "$k" in
+    MemoryMax|CPUQuota|TasksMax)
+      val="$(grep -shE "^${k}=" "$drop" 2>/dev/null | tail -1 | cut -d= -f2-)" ;;
+    pm|pm.*)
+      val="$(grep -shE "^${k//./\\.}[[:space:]]*=" "$pool" 2>/dev/null | tail -1 | sed 's/^[^=]*=[[:space:]]*//')" ;;
+    *)
+      val="$(grep -shE "^php_admin_(value|flag)\[${k}\][[:space:]]*=" "$pool" 2>/dev/null | tail -1 | sed 's/^[^=]*=[[:space:]]*//')" ;;
+  esac
+  val="${val%%;*}"                                        # drop trailing inline comment
+  printf '%s' "$val" | sed 's/[[:space:]]*$//'            # trim trailing whitespace
+}
+
 # Apply a tune-vhost change, but offer a dry-run preview first (fail-safe).
 tune_apply() {  # tune_apply <site> <tune-vhost args...>
   local site="$1"; shift
@@ -128,7 +148,7 @@ tune_apply() {  # tune_apply <site> <tune-vhost args...>
 # which keeps pool / AppArmor / systemd / ufw in sync. Loops so several edits to
 # the same site are easy; 'Indietro' returns to the main menu.
 action_modify() {
-  local s op host port proto k v f p
+  local s op host port proto k v f p cur
   s="$(pick_site)" || return; [ -n "$s" ] || return
   while true; do
     op="$(ui_menu "Modifica '$s' — scegli un'operazione:" \
@@ -171,11 +191,14 @@ action_modify() {
           MemoryMax           "cgroup MemoryMax (es. 512M)" \
           CPUQuota            "cgroup CPUQuota (es. 50%)" \
           TasksMax            "cgroup TasksMax (es. 100)")" || continue
-        v="$(ui_input "Nuovo valore per $k:" "")" || continue
+        cur="$(pool_get "$s" "$k")"
+        v="$(ui_input "Valore per $k  (attuale: ${cur:-non impostato}):" "$cur")" || continue
         [ -n "$v" ] && tune_apply "$s" set "$k" "$v" ;;
-      disable) f="$(ui_input "Funzione PHP da DISABILITARE:" "exec")" || continue
+      disable) cur="$(pool_get "$s" disable_functions)"
+               f="$(ui_input "Funzione PHP da DISABILITARE. Gia' disabilitate: ${cur:-nessuna}" "")" || continue
                [ -n "$f" ] && tune_apply "$s" disable "$f" ;;
-      enable)  f="$(ui_input "Funzione PHP da RIABILITARE:" "")" || continue
+      enable)  cur="$(pool_get "$s" disable_functions)"
+               f="$(ui_input "Funzione da RIABILITARE (una tra le attuali: ${cur:-nessuna})" "")" || continue
                [ -n "$f" ] && tune_apply "$s" enable "$f" ;;
       tlson)   tune_apply "$s" tls-on ;;
       tlsoff)  tune_apply "$s" tls-off ;;
