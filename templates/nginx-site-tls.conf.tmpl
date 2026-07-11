@@ -1,0 +1,33 @@
+# /etc/nginx/sites-available/@@SITE@@   (rendered by setup-tls.sh) — HTTP -> HTTPS.
+# The port-80 server keeps the ACME http-01 path (for Let's Encrypt renewals)
+# and redirects everything else to HTTPS. The 443 server terminates TLS and
+# includes the same shared app config as the HTTP vhost.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name @@SERVER_NAME@@;
+
+    access_log /var/log/nginx/@@SITE@@.access.log;
+    error_log  /var/log/nginx/@@SITE@@.error.log;
+
+    # Let's Encrypt http-01 challenge stays on plain HTTP.
+    location ^~ /.well-known/acme-challenge/ { root @@DOCROOT@@; default_type "text/plain"; allow all; }
+
+    location / { return 301 https://$host$request_uri; }
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name @@SERVER_NAME@@;
+
+    access_log /var/log/nginx/@@SITE@@.access.log;
+    error_log  /var/log/nginx/@@SITE@@.error.log;
+
+    ssl_certificate     @@TLS_CERT@@;
+    ssl_certificate_key @@TLS_KEY@@;
+    include /etc/nginx/snippets/tls-params.conf;
+    @@HSTS@@
+
+    include /etc/nginx/snippets/@@SITE@@-app.conf;
+}

@@ -1,0 +1,77 @@
+; =============================================================================
+; PHP-FPM pool: @@SITE@@   (rendered by harden-vhost.sh — do not edit by hand)
+; Docroot: @@DOCROOT@@
+;
+; Every security directive uses the php_admin_* form so a compromised script
+; cannot turn it back off with ini_set().
+; NOTE: open_basedir, ReadWritePaths and the AppArmor reach-rules are owned by
+;       the sync engine (lib/policy.sh) — change them with tune-vhost.sh, never
+;       by hand, so the three stay consistent.
+; =============================================================================
+[@@SITE@@]
+
+; --- Process identity --------------------------------------------------------
+user  = @@RUNTIME_USER@@
+group = @@RUNTIME_GROUP@@
+
+; --- Listening socket (unix, only nginx/www-data may connect) -----------------
+listen       = @@SOCKET@@
+listen.owner = @@WEB_USER@@
+listen.group = @@WEB_USER@@
+listen.mode  = 0660
+
+; --- AppArmor per-pool hat: worker runs as php-fpm//@@SITE@@ -------------------
+apparmor_hat = @@SITE@@
+
+; --- Process manager (per-site tunables — override via the site .env) ---------
+pm = ondemand
+pm.max_children         = @@PM_MAX_CHILDREN@@
+pm.process_idle_timeout = 10s
+pm.max_requests         = @@PM_MAX_REQUESTS@@
+
+; --- Resource limits & timeouts ----------------------------------------------
+request_terminate_timeout = 120s
+rlimit_files              = 4096
+rlimit_core               = 0
+catch_workers_output      = yes
+clear_env                 = yes
+security.limit_extensions = .php   ; FPM runs ONLY *.php -> uploaded evil.jpg can't execute
+
+; =============================================================================
+; PHP hardening
+; =============================================================================
+
+; open_basedir is written here by lib/policy.sh (union of the site's read/write
+; reach paths, each with a trailing slash). Do not add it by hand.
+
+; --- Temp / session / error paths (all OUTSIDE the docroot) ------------------
+php_admin_value[upload_tmp_dir]    = @@TMP_PATH@@
+php_admin_value[session.save_path] = @@SESSION_PATH@@
+php_admin_value[error_log]         = @@LOG_PATH@@/php-error.log
+
+; --- Disable command-execution functions (the #1 webshell tool) --------------
+php_admin_value[disable_functions] = exec,passthru,shell_exec,system,proc_open,popen,pcntl_exec,proc_close,proc_get_status,proc_nice,proc_terminate,dl,posix_kill,posix_setuid,posix_setgid,posix_mkfifo,apache_child_terminate
+
+; --- Remote code / file inclusion --------------------------------------------
+php_admin_flag[allow_url_include] = off
+php_admin_flag[allow_url_fopen]   = off
+
+; --- Information leakage ------------------------------------------------------
+php_admin_flag[expose_php]     = off
+php_admin_flag[display_errors] = off
+php_admin_flag[log_errors]     = on
+
+; --- Session cookie hardening ------------------------------------------------
+php_admin_flag[session.cookie_httponly]  = on
+php_admin_flag[session.use_strict_mode]  = on
+php_admin_flag[session.use_only_cookies] = on
+php_admin_value[session.cookie_samesite] = Lax
+php_admin_flag[session.cookie_secure]    = @@COOKIE_SECURE@@   ; on requires HTTPS
+
+; --- Upload / request / execution caps ---------------------------------------
+php_admin_flag[file_uploads]         = on
+php_admin_value[upload_max_filesize] = @@UPLOAD_MAX_FILESIZE@@
+php_admin_value[post_max_size]       = @@POST_MAX_SIZE@@
+php_admin_value[memory_limit]        = @@MEMORY_LIMIT@@
+php_admin_value[max_execution_time]  = @@MAX_EXECUTION_TIME@@
+php_admin_value[max_input_time]      = 60

@@ -1,0 +1,20 @@
+## /etc/audit/rules.d/hardening.rules  (installed by harden-os.sh)
+## Global, host-wide audit rules. Per-site execve rules (keyed <site>_exec) are
+## appended by harden-vhost.sh. Keep this file mutable (no `-e 2`) so sites can
+## add rules and reload with `augenrules --load`.
+
+## Recursively watch writes/attribute-changes anywhere under the web root.
+## Use an audit TREE rule (-F dir=) not a WATCH (-w): a -w on a directory is NOT
+## recursive and misses files in subdirectories (and subdirs created after load).
+## -F dir= watches the whole subtree, including files created later.
+-a always,exit -F dir=/var/www -F perm=wa -k webroot_write
+
+## Any privileged binary executed by a service account is worth recording.
+## Per-site scripts narrow this to a specific uid; this is the coarse backstop.
+-a always,exit -F arch=b64 -S execve -F euid=0 -F auid>=1000 -F auid!=4294967295 -k priv_exec
+
+## Tamper-watch the hardening state, firewall, and AppArmor policy (recursive
+## dirs via -F dir=, single files via -w).
+-a always,exit -F dir=/etc/hardening  -F perm=wa -k hardening_state
+-a always,exit -F dir=/etc/apparmor.d -F perm=wa -k apparmor_change
+-w /etc/ufw/before.rules -p wa -k ufw_change

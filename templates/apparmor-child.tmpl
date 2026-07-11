@@ -1,0 +1,60 @@
+# vim: ft=apparmor
+# /etc/apparmor.d/php-fpm.d/@@SITE@@   (rendered by harden-vhost.sh)
+#
+# Per-pool CHILD profile -> worker runs as  php-fpm//@@SITE@@
+# AppArmor is DEFAULT-DENY: the worker may touch ONLY what is granted here.
+# NO 'x' (execute) is granted anywhere, so it cannot exec ANY external binary.
+#
+# The reach-region below (read/write path grants) is owned by lib/policy.sh —
+# change it with tune-vhost.sh, never by hand.
+
+profile @@SITE@@ flags=(complain,attach_disconnected) {
+  include <abstractions/base>
+  include <abstractions/nameservice>
+  include <abstractions/openssl>
+  include <abstractions/ssl_certs>
+  include <abstractions/php>
+
+  # receive signals from the FPM master
+  signal (receive) peer=php-fpm,
+
+  # its own PHP config
+  /etc/php{,5,7,8}/** r,
+
+  # parent dir (realpath resolution)
+  @@SITE_PARENT@@/ r,
+
+  # database / network sockets the app legitimately needs (DB over TCP or socket)
+  network inet stream,
+  network inet6 stream,
+  /run/mysqld/mysqld.sock rw,
+
+  # the pool's OWN listening socket: workers inherit the fd from the master and
+  # accept/read/write/shutdown on it. Without this the hat serves 0 requests
+  # under enforce (the master's socket grant does NOT extend into the hat).
+  /run/php/php*-@@SITE@@.sock rw,
+  unix (accept, connect, send, receive, shutdown) type=stream,
+
+  # --- managed read/write path grants (open_basedir mirror) ----------------
+# >>> hardening:reach >>>
+  # (populated by lib/policy.sh via harden-vhost.sh / tune-vhost.sh)
+# <<< hardening:reach <<<
+
+  # --- manual permits granted from soak denials (add-aa-permit.sh) ----------
+# >>> hardening:permits >>>
+  # (managed by add-aa-permit.sh — do not edit by hand)
+# <<< hardening:permits <<<
+
+  # --- Explicit, AUDITED denials (logging, not protection; exec already impossible)
+  audit deny /usr/bin/wget  x,
+  audit deny /usr/bin/curl  x,
+  audit deny /bin/sh        x,
+  audit deny /bin/bash      x,
+  audit deny /bin/dash      x,
+  audit deny /usr/bin/python* x,
+  audit deny /usr/bin/perl  x,
+
+  # per-pool snippet hooks
+  include if exists <php-fpm.d/@@SITE@@.d>
+  include if exists <local/php-fpm.d/@@SITE@@>
+}

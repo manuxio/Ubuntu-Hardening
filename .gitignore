@@ -1,0 +1,22 @@
+# --- secrets: NEVER commit ---------------------------------------------------
+/.env
+/.env.*
+*.pem
+*.key
+*.crt
+id_ed25519*
+id_rsa*
+
+# --- local-only raw session notes (internal hostnames/IPs) -------------------
+transcript-hardening-session.md
+
+# --- logs / scratch / temp ---------------------------------------------------
+*.log
+/scratch/
+/tmp/
+
+# --- OS / editor junk --------------------------------------------------------
+.DS_Store
+Thumbs.db
+*.swp
+*~

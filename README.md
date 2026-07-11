@@ -1,0 +1,118 @@
+# Ubuntu Hardening
+
+Replicable, **defensive** hardening for an Ubuntu server that hosts **several PHP
+virtual hosts** (Joomla / WordPress and similar) behind **nginx + PHP-FPM**. The
+goal is to limit **horizontal blast radius**: a compromise of one site cannot
+read, write, or execute across the others, and post-exploitation moves (dropping
+a webshell, pulling a payload, spawning a shell, phoning home) are prevented,
+contained, and detected.
+
+Verified end-to-end on a real Ubuntu 22.04 VM (two isolated sites, AppArmor
+**enforce**) and in ephemeral Docker.
+
+> 📖 **Full operator guide (Italian):** [`GUIDA.md`](GUIDA.md) ·
+> 🧪 **Complete walkthrough with real outputs:** [`example.md`](example.md)
+
+---
+
+## What it sets up (defence in depth)
+
+| Layer | Control |
+|---|---|
+| Identity | one Unix user + PHP-FPM pool **per site** |
+| Filesystem | code **not writable** by the runtime user; setgid writable dirs; `configuration.php` read-only |
+| PHP pool | `open_basedir`, `security.limit_extensions=.php`, `disable_functions`, `allow_url_*=off` (all `php_admin_*`) |
+| AppArmor | per-pool **hat** (`php-fpm//<site>`) that grants **no exec** anywhere |
+| systemd | sandbox (`ProtectSystem=strict`, `ReadWritePaths`, `PrivateTmp`, cgroup caps) |
+| Network | **egress firewall by uid** (ufw) — allow only DNS/DB/mail/443 |
+| Detection | auditd (webroot writes + per-site `execve`), AIDE |
+| Web | nginx script-must-exist, PHP-off in upload dirs, per-site logs, **TLS** |
+| Perimeter | UFW default-deny, fail2ban, unattended-upgrades, sysctl |
+
+## Requirements
+
+- **Ubuntu 22.04 LTS** (ships PHP 8.1) — the scripts are generic but default to 8.1.
+- root / sudo on the target server.
+- PHP-FPM built with AppArmor support (Ubuntu's is): `ldd /usr/sbin/php-fpm8.1 | grep apparmor`.
+- For testing without a server: **Docker** (fast) or a throwaway **VM**.
+
+## Download
+
+```bash
+git clone git@github.com:manuxio/Ubuntu-Hardening.git
+cd Ubuntu-Hardening
+# or: download the ZIP from the GitHub page
+```
+
+## Quick start (on the server)
+
+```bash
+# 0) copy this repo to the server (e.g. rsync/scp/tar), then cd into it
+
+# 1) OS layer — run ONCE per server
+sudo bash scripts/harden-os.sh
+
+# 2) per site: create the docroot + database, fill a sites/<name>.env, then:
+sudo bash -c 'set -a; . sites/site1.env; set +a; bash scripts/harden-vhost.sh'
+
+# 3) restart php-fpm, exercise the site (complain-mode soak), then enforce:
+sudo systemctl restart php8.1-fpm
+sudo bash scripts/enforce-vhost.sh site1        # AppArmor complain -> enforce (auto-rollback if it breaks)
+
+# 4) HTTPS (optional):
+sudo bash scripts/setup-tls.sh site1 --self-signed                       # staging
+sudo bash scripts/setup-tls.sh site1 --letsencrypt --email you@dom.tld   # real cert + auto-renew
+```
+
+Repeat step 2–4 for each site. Everything is **interactive with sensible
+defaults** and **env-overridable** (pre-seed a `sites/<name>.env`), **idempotent**,
+and prints the verification commands at the end. See [`example.md`](example.md)
+for a full two-site run with real command output.
+
+## Day-2 operations
+
+```bash
+sudo bash scripts/tune-vhost.sh   site1 allow 10.0.0.5 587      # open an egress destination
+sudo bash scripts/tune-vhost.sh   site1 grant-write /srv/shared  # pool + AppArmor + systemd, in sync
+sudo bash scripts/show-aa-denials.sh site1                       # list AppArmor denials to resolve
+sudo bash scripts/add-aa-permit.sh   site1 <id>                  # grant one (exec refused by default)
+```
+
+## Test without touching production
+
+```bash
+# Docker (Linux / macOS / Git-Bash) — config generation, filesystem model,
+# live php-fpm behaviour, and a live MariaDB connectivity check:
+bash test/run-tests.sh
+
+# Windows PowerShell:
+powershell -ExecutionPolicy Bypass -File test\run-tests.ps1
+```
+
+Docker can't exercise kernel-layer controls (AppArmor enforce, auditd, ufw,
+systemd) — those are validated on a real VM. See [`PLAN.md`](PLAN.md) §Test.
+
+## Scripts
+
+| Script | Purpose |
+|---|---|
+| `scripts/harden-os.sh` | server-wide layer (once) |
+| `scripts/harden-vhost.sh` | per-site setup (user, pool, hat, nginx, egress, auditd) |
+| `scripts/enforce-vhost.sh` | complain → enforce, with soak check + auto-rollback |
+| `scripts/setup-tls.sh` | HTTPS: self-signed or Let's Encrypt (+ auto-renew) |
+| `scripts/tune-vhost.sh` | day-2 policy (egress / reach dirs / limits), kept in sync |
+| `scripts/show-aa-denials.sh` + `add-aa-permit.sh` | soak workflow: list denials, grant one |
+| `tools/hardening-check.php` / `hardening-report.php` | GUI/JSON hardening self-test (temporary / gated) |
+
+## Documentation
+
+- [`GUIDA.md`](GUIDA.md) — full operator guide (Italian): install, tune, TLS, logs, troubleshooting
+- [`example.md`](example.md) — 2 users / 2 docroots, from a clean VM to enforced isolation, real outputs
+- [`apache-php-hardening-runbook.md`](apache-php-hardening-runbook.md) — phased rationale
+- [`PLAN.md`](PLAN.md) — build plan & test strategy · [`CLAUDE.md`](CLAUDE.md) — project context
+
+## Security note
+
+This is **authorized, defensive** security tooling (least privilege, sandboxing,
+egress control, integrity monitoring). Review the scripts before running them on
+your systems.

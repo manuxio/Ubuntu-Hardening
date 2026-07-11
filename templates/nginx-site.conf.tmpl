@@ -1,0 +1,14 @@
+# /etc/nginx/sites-available/@@SITE@@   (rendered by harden-vhost.sh) — HTTP only.
+# Per-site access/error logs. To enable HTTPS, run:
+#     sudo scripts/setup-tls.sh @@SITE@@ --self-signed      # staging / immediate
+#     sudo scripts/setup-tls.sh @@SITE@@ --letsencrypt --email you@example.com
+server {
+    listen 80;
+    listen [::]:80;
+    server_name @@SERVER_NAME@@;
+
+    access_log /var/log/nginx/@@SITE@@.access.log;
+    error_log  /var/log/nginx/@@SITE@@.error.log;
+
+    include /etc/nginx/snippets/@@SITE@@-app.conf;
+}

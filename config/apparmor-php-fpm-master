@@ -1,0 +1,73 @@
+# vim: ft=apparmor
+# /etc/apparmor.d/php-fpm   -- hardened MASTER profile (installed by harden-os.sh)
+#
+# The master runs as root and launches each pool. Real confinement happens in
+# the per-pool CHILD profiles under /etc/apparmor.d/php-fpm.d/ (created per site
+# by harden-vhost.sh). A pool WITHOUT an 'apparmor_hat' runs under THIS master
+# profile, so the baseline exec-denies below act as a safety net.
+#
+# TEST first : keep flags=(complain,...), reload, use the sites, read denials.
+# ENFORCE    : drop 'complain' from this file AND every child, reload.
+
+abi <abi/3.0>,
+
+include <tunables/global>
+
+profile php-fpm /usr/sbin/php-fpm* flags=(complain,attach_disconnected) {
+  include <abstractions/base>
+  include <abstractions/nameservice>
+  include <abstractions/php>
+  include <abstractions/openssl>
+  include <abstractions/ssl_certs>
+
+  /etc/php{,5,7,8}/** r,
+
+  capability net_admin,
+  capability setuid,
+  capability setgid,
+  capability chown,
+  capability kill,
+  capability dac_override,
+
+  # transition each worker into its pool sub-profile
+  @{PROC}/@{pid}/attr/{apparmor/,}current rw,
+
+  /var/log/php*-fpm.log rw,
+
+  # systemd Type=notify readiness (sd_notify). With AF_UNIX mediation the write
+  # to /run/systemd/notify is a 'sendmsg' that a file rule alone does NOT cover;
+  # the unix(dgram) rule is required or the unit times out on start.
+  /run/systemd/notify w,
+  unix (connect, send, receive) type=dgram,
+
+  @{run}/php{,-fpm}/php*.pid rw,
+  # match ANY pool socket name (e.g. php8.1-web_user.sock), not only *-fpm.sock
+  @{run}/php{,-fpm}/php*.sock rwlk,
+
+  # reload
+  /usr/sbin/php-fpm* rix,
+
+  deny / rw,
+
+  # --- baseline exec-deny net for any pool lacking its own hat --------------
+  audit deny /usr/bin/wget  x,
+  audit deny /usr/bin/curl  x,
+  audit deny /usr/bin/lynx  x,
+  audit deny /usr/bin/nc    x,
+  audit deny /usr/bin/ncat  x,
+  audit deny /usr/bin/socat x,
+  audit deny /bin/sh        x,
+  audit deny /bin/bash      x,
+  audit deny /bin/dash      x,
+  audit deny /usr/bin/sh    x,
+  audit deny /usr/bin/bash  x,
+  audit deny /usr/bin/dash  x,
+  audit deny /usr/bin/python* x,
+  audit deny /usr/bin/perl  x,
+
+  signal (send) peer=php-fpm//*,
+  change_profile -> php-fpm//*,
+
+  include if exists <php-fpm.d>
+  include if exists <local/php-fpm>
+}

@@ -1,0 +1,35 @@
+# /etc/nginx/snippets/@@SITE@@-app.conf   (rendered by harden-vhost.sh)
+# Shared serving config for the "@@SITE@@" vhost — included by its HTTP and/or
+# HTTPS server block. Same protections as the runbook: no direct config/secret
+# access, PHP disabled in writable dirs, script-must-exist, fastcgi to the pool.
+root @@DOCROOT@@;
+index index.php index.html;
+
+include /etc/nginx/snippets/security-headers.conf;
+fastcgi_hide_header X-Powered-By;
+client_max_body_size @@CLIENT_MAX_BODY@@;
+
+# Never serve hidden files, VCS metadata, or the config/secrets.
+location ~ /\.                   { deny all; }
+location ~* configuration\.php$  { deny all; }
+location ~* \.(?:ini|log|sh|bak|sql|twig)$ { deny all; }
+
+# Kill PHP execution in writable/upload dirs (nginx equivalent of SetHandler
+# None). MUST precede the generic \.php$ location.
+location ~* ^/(@@WRITABLE_REGEX@@)/.*\.php$ { deny all; }
+
+# Front controller.
+location / { try_files $uri $uri/ /index.php?$args; }
+
+# PHP: only real, existing .php files reach FPM.
+location ~ \.php$ {
+    try_files $uri =404;                        # script-must-exist
+    fastcgi_split_path_info ^(.+\.php)(/.+)$;
+    fastcgi_pass unix:@@SOCKET@@;
+    fastcgi_index index.php;
+    include fastcgi_params;
+    fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+    fastcgi_param PATH_INFO $fastcgi_path_info;
+    fastcgi_param HTTPS $https if_not_empty;    # let PHP know when it's on TLS
+    fastcgi_read_timeout 120s;
+}

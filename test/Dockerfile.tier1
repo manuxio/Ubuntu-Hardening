@@ -1,0 +1,20 @@
+# Tier-1 test image: plain Ubuntu 22.04 with nginx + PHP 8.1-FPM + AppArmor
+# userspace pre-baked, so ephemeral test runs are fast and work offline.
+# The hardening SCRIPTS are NOT copied in — they are bind-mounted at run time
+# (they live on the host and the container restarts clean).
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Prevent package postinst from trying to start services during image build.
+RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && chmod +x /usr/sbin/policy-rc.d
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      nginx \
+      php8.1-fpm php8.1-cli php8.1-mysql php8.1-gd php8.1-xml php8.1-mbstring php8.1-curl \
+      ufw auditd aide acl apparmor-utils fail2ban unattended-upgrades \
+      curl ca-certificates iproute2 procps sudo dos2unix \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /work
+CMD ["sleep", "infinity"]
