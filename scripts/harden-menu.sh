@@ -439,8 +439,8 @@ if [ "${1:-}" = "--check" ]; then
   echo "  repo root  : $REPO"
   miss=0
   for s in harden-os.sh harden-vhost.sh enforce-vhost.sh setup-tls.sh tune-vhost.sh \
-           destroy-vhost.sh deploy-test.sh show-aa-denials.sh add-aa-permit.sh \
-           audit-os.sh scan-cve.sh audit-cis.sh; do
+           refresh-vhost.sh destroy-vhost.sh deploy-test.sh show-aa-denials.sh \
+           add-aa-permit.sh audit-os.sh scan-cve.sh audit-cis.sh; do
     if [ -f "$SCRIPTS/$s" ]; then echo "  [ok]   scripts/$s"; else echo "  [MISS] scripts/$s"; miss=$((miss+1)); fi
   done
   if [ -f "$TESTDIR/tier2-e2e.sh" ]; then echo "  [ok]   test/tier2-e2e.sh"; else echo "  [MISS] test/tier2-e2e.sh"; miss=$((miss+1)); fi
@@ -459,6 +459,7 @@ while true; do
     cis      "Audit conformità CIS (OpenSCAP)" \
     newvhost "Nuovo sito (personalizza TUTTI i parametri)" \
     modify   "Modifica un sito (nginx, egress, dir, PHP, cookie)" \
+    refresh  "Aggiorna config di un sito (applica gli ultimi template)" \
     enforce  "Enforce AppArmor di un sito (soak->enforce)" \
     tls      "HTTPS / TLS di un sito" \
     deploytest "Deploy pagina di test PHP (verifica un sito)" \
@@ -477,6 +478,7 @@ while true; do
     enforce)  action_site "$SCRIPTS/enforce-vhost.sh" ;;
     tls)      action_tls ;;
     modify)   action_modify ;;
+    refresh)  action_site "$SCRIPTS/refresh-vhost.sh" ;;
     deploytest) action_site "$SCRIPTS/deploy-test.sh" ;;
     denials)  action_site "$SCRIPTS/show-aa-denials.sh" ;;
     destroy)  action_site "$SCRIPTS/destroy-vhost.sh" ;;

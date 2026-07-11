@@ -200,6 +200,18 @@ policy_meta_set "$SITE" DOCROOT      "$DOCROOT"
 policy_meta_set "$SITE" WEB_USER     "$WEB_USER"
 policy_meta_set "$SITE" SOCKET       "$SOCKET"
 
+# Save the full resolved answer set so the site can be re-rendered later from the
+# CURRENT templates (refresh-vhost.sh) — how template/security fixes reach sites
+# that already exist. %q keeps values with spaces (WRITABLE_DIRS, ports) safe.
+ANSWERS="$(policy_state_dir "$SITE")/answers.env"
+{ for _v in SITE SERVER_NAME DOCROOT RUNTIME_USER WEB_USER PHP_VERSION WRITABLE_DIRS \
+            TMP_PATH SESSION_PATH LOG_PATH DB_HOST DB_PORT MAIL_HOST MAIL_PORTS \
+            ALLOW_HTTPS COOKIE_SECURE PM_MAX_CHILDREN PM_MAX_REQUESTS MEMORY_LIMIT \
+            UPLOAD_MAX_FILESIZE POST_MAX_SIZE MAX_EXECUTION_TIME ENABLE_APPARMOR_HAT; do
+    printf '%s=%q\n' "$_v" "${!_v:-}"
+  done; } > "$ANSWERS"
+chmod 600 "$ANSWERS"
+
 # Reach: code is read-only; writable dirs + tmp/session/log are read-write.
 reach_add "$SITE" "$DOCROOT" ro
 for d in $WRITABLE_DIRS; do reach_add "$SITE" "$DOCROOT/$d" rw; done
