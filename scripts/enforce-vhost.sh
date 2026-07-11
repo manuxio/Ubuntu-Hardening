@@ -63,6 +63,26 @@ set_complain() { profile_is_complain "$1" || sed -i -E '/^[[:space:]]*profile\b/
 
 reload_master() { apparmor_parser -r "$MASTER"; }
 
+# Assert the hat grants the declared MINIMUM the worker needs to function: READ
+# on the docroot (its code) and READ-WRITE on every writable path the operator
+# declared. reach_rebuild generates these from the same source as open_basedir,
+# so a gap means the sync engine never ran (or someone hand-edited the hat) — the
+# site would break the moment it goes enforce.
+verify_hat_reach() {
+  local d p miss=""
+  d="$(policy_state_dir "$SITE")"
+  while IFS= read -r p; do [ -n "$p" ] || continue
+    grep -qF -- "  ${p}/ r," "$HAT" || miss="${miss}"$'\n'"    READ  $p"
+  done < <(cat "$d/reach-ro.paths" 2>/dev/null || true)
+  while IFS= read -r p; do [ -n "$p" ] || continue
+    grep -qF -- "  ${p}/ rw," "$HAT" || miss="${miss}"$'\n'"    WRITE $p"
+  done < <(cat "$d/reach-rw.paths" 2>/dev/null || true)
+  [ -z "$miss" ] && return 0
+  warn "the AppArmor hat is MISSING these declared minimum grants:"
+  printf '%s\n' "$miss" >&2
+  return 1
+}
+
 # spawn a worker and return 0 if it served cleanly, 1 if it failed. Catches both
 # hard hat-transition failures (fpm log) and a broken worker (HTTP 5xx / no
 # connection). Sets HEALTH_CODE for reporting.
@@ -141,6 +161,16 @@ if [ -n "$DENIALS" ]; then
   else
     info "recent denials are exec-only (the hat blocking exec — expected); safe to enforce."
   fi
+fi
+
+# --- minimum-privilege assurance: the hat MUST at least read the code and write
+# the declared writable dirs, or the worker can't function once enforced. Runs
+# in --dry-run too, so you can verify without flipping. --------------------------
+if verify_hat_reach; then
+  info "hat grants the declared minimum: read code + write $(grep -c . "$(policy_state_dir "$SITE")/reach-rw.paths" 2>/dev/null || echo 0) declared path(s)."
+else
+  warn "resync it: 'tune-vhost.sh $SITE grant-write <path>' for the missing paths, or re-run harden-vhost.sh."
+  [ "$FORCE" -eq 1 ] || die "refusing to enforce an incomplete hat (pass --force to override; auto-rollback still guards)."
 fi
 
 # --- plan / confirm ----------------------------------------------------------
