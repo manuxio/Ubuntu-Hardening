@@ -54,6 +54,11 @@ ui_input() {  # ui_input "prompt" "default"  -> echoes value
 ui_msg() {  # ui_msg "text"
   if [ "$UI" = whiptail ]; then whiptail --title "$TITLE" --msgbox "$1" 12 70; else echo "-- $1" >&2; fi
 }
+ui_yesno() {  # ui_yesno "prompt" -> 0 yes / 1 no
+  if [ "$UI" = whiptail ]; then whiptail --title "$TITLE" --yesno "$1" 14 72; return $?; fi
+  printf '%s [s/N]: ' "$1" >&2; local a; read -r a || return 1
+  case "$a" in s|S|y|Y) return 0 ;; *) return 1 ;; esac
+}
 
 # --- discover configured sites from the php-fpm pools ------------------------
 list_sites() {
@@ -96,11 +101,76 @@ action_tls() {
     runscript "$SCRIPTS/setup-tls.sh" "$s" --self-signed
   fi
 }
-action_tune_allow() {
-  local s host port; s="$(pick_site)" || return; [ -n "$s" ] || return
-  host="$(ui_input "Host/IP di destinazione egress:" "10.0.0.5")" || return
-  port="$(ui_input "Porta:" "587")" || return
-  runscript "$SCRIPTS/tune-vhost.sh" "$s" allow "$host" "$port"
+# Apply a tune-vhost change, but offer a dry-run preview first (fail-safe).
+tune_apply() {  # tune_apply <site> <tune-vhost args...>
+  local site="$1"; shift
+  if ui_yesno "Applicare questa modifica?
+
+  tune-vhost.sh $site $*
+
+(No = solo anteprima, dry-run)"; then
+    runscript "$SCRIPTS/tune-vhost.sh" "$site" "$@"
+  else
+    runscript "$SCRIPTS/tune-vhost.sh" "$site" "$@" --dry-run
+  fi
+}
+
+# Full "modify an existing site" submenu — every entry drives tune-vhost.sh,
+# which keeps pool / AppArmor / systemd / ufw in sync. Loops so several edits to
+# the same site are easy; 'Indietro' returns to the main menu.
+action_modify() {
+  local s op host port proto k v f p
+  s="$(pick_site)" || return; [ -n "$s" ] || return
+  while true; do
+    op="$(ui_menu "Modifica '$s' — scegli un'operazione:" \
+      show    "Mostra la policy attuale (sola lettura)" \
+      allow   "Egress: APRI una destinazione (host:porta)" \
+      deny    "Egress: CHIUDI una destinazione" \
+      gwrite  "Directory: concedi SCRITTURA" \
+      gread   "Directory: concedi (sola) LETTURA" \
+      revoke  "Directory: REVOCA accesso" \
+      setk    "Impostazione pool (memoria / limiti / flag)" \
+      disable "PHP: DISABILITA una funzione" \
+      enable  "PHP: riabilita una funzione" \
+      tlson   "Cookie sicuri ON (session.cookie_secure)" \
+      tlsoff  "Cookie sicuri OFF (staging HTTP)" \
+      back    "<< Indietro")" || return
+    case "$op" in
+      show)  runscript "$SCRIPTS/tune-vhost.sh" "$s" show ;;
+      allow|deny)
+        host="$(ui_input "Host/IP di destinazione (o 'any'):" "any")" || continue
+        port="$(ui_input "Porta:" "587")" || continue
+        proto="$(ui_menu "Protocollo:" tcp "TCP" udp "UDP")" || continue
+        tune_apply "$s" "$op" "$host" "$port" "$proto" ;;
+      gwrite) p="$(ui_input "Percorso da rendere SCRIVIBILE:" "/srv/${s}-shared")" || continue
+              [ -n "$p" ] && tune_apply "$s" grant-write "$p" ;;
+      gread)  p="$(ui_input "Percorso da rendere LEGGIBILE:" "/srv/${s}-ro")" || continue
+              [ -n "$p" ] && tune_apply "$s" grant-read "$p" ;;
+      revoke) p="$(ui_input "Percorso da REVOCARE:" "")" || continue
+              [ -n "$p" ] && tune_apply "$s" revoke "$p" ;;
+      setk)
+        k="$(ui_menu "Quale impostazione cambiare?" \
+          memory_limit        "PHP memory_limit (es. 256M)" \
+          max_execution_time  "PHP max_execution_time (secondi)" \
+          upload_max_filesize "PHP upload_max_filesize (es. 32M)" \
+          post_max_size       "PHP post_max_size (es. 32M)" \
+          allow_url_fopen     "PHP allow_url_fopen (on/off)" \
+          display_errors      "PHP display_errors (on/off)" \
+          expose_php          "PHP expose_php (on/off)" \
+          MemoryMax           "cgroup MemoryMax (es. 512M)" \
+          CPUQuota            "cgroup CPUQuota (es. 50%)" \
+          TasksMax            "cgroup TasksMax (es. 100)")" || continue
+        v="$(ui_input "Nuovo valore per $k:" "")" || continue
+        [ -n "$v" ] && tune_apply "$s" set "$k" "$v" ;;
+      disable) f="$(ui_input "Funzione PHP da DISABILITARE:" "exec")" || continue
+               [ -n "$f" ] && tune_apply "$s" disable "$f" ;;
+      enable)  f="$(ui_input "Funzione PHP da RIABILITARE:" "")" || continue
+               [ -n "$f" ] && tune_apply "$s" enable "$f" ;;
+      tlson)   tune_apply "$s" tls-on ;;
+      tlsoff)  tune_apply "$s" tls-off ;;
+      back)    return ;;
+    esac
+  done
 }
 action_site() {  # action_site <script> [extra args after site]
   local script="$1"; shift

@@ -54,12 +54,38 @@ fetch(){ local S="$1" pq="$2"
   cat /tmp/fetch.out
 }
 
+# Never let a long step block on a hidden prompt: everything runs with stdin from
+# /dev/null (so the scripts' prompt() falls to env/default instead of reading the
+# TTY) and answers pre-seeded. Belt and suspenders.
+export ASSUME_YES=1
+export PHP_VERSION="${PHP_VERSION:-8.1}" SSH_HARDEN="${SSH_HARDEN:-no}" RUN_AIDEINIT="${RUN_AIDEINIT:-no}"
+
+# run_live <logfile> <cmd...> — run a long command with its output going to a log,
+# and (on a TTY) show a live one-line status = the last line of that output, so
+# the operator sees it is working. Returns the command's exit code.
+run_live(){
+  local logf="$1"; shift
+  if [ ! -t 1 ]; then "$@" </dev/null >"$logf" 2>&1; return $?; fi
+  ("$@") </dev/null >"$logf" 2>&1 &
+  local pid=$! l
+  while kill -0 "$pid" 2>/dev/null; do
+    l="$(tail -n1 "$logf" 2>/dev/null | tr -d '\r\t' | cut -c1-70)"
+    printf '\r  \033[2m%-72s\033[0m' "$l"
+    sleep 0.5
+  done
+  wait "$pid"; local rc=$?
+  printf '\r%*s\r' 76 ''
+  return $rc
+}
+# provision one site from its env (used via run_live so it can't block/blank out)
+provision_one(){ local S="$1"; set -a; . "sites/${S}.env"; set +a; bash scripts/harden-vhost.sh; }
+
 [ "$(id -u)" -eq 0 ] || { echo "run as root: sudo bash test/tier2-e2e.sh"; exit 2; }
 [ -f "$PROBE" ] || { echo "missing $PROBE"; exit 2; }
 
 # ---------------------------------------------------------------------------
 phase "PHASE 1 — harden-os idempotency (re-run must be a clean no-op)"
-if ASSUME_YES=1 bash scripts/harden-os.sh >/tmp/harden-os.log 2>&1; then
+if run_live /tmp/harden-os.log bash scripts/harden-os.sh; then
   ok "harden-os.sh re-run exit 0"
 else
   no "harden-os.sh re-run FAILED (see /tmp/harden-os.log)"; tail -20 /tmp/harden-os.log
@@ -82,10 +108,10 @@ PHP
     CREATE USER IF NOT EXISTS '${S}'@'localhost' IDENTIFIED BY '${DBPASS}';
     GRANT ALL ON ${S}db.* TO '${S}'@'127.0.0.1'; GRANT ALL ON ${S}db.* TO '${S}'@'localhost';
     FLUSH PRIVILEGES;"
-  if ( set -a; . "sites/${S}.env"; set +a; bash scripts/harden-vhost.sh ) >/tmp/harden-$S.log 2>&1; then
+  if run_live "/tmp/harden-$S.log" provision_one "$S"; then
     ok "harden-vhost.sh $S exit 0"
   else
-    no "harden-vhost.sh $S FAILED (see /tmp/harden-$S.log)"; tail -25 /tmp/harden-$S.log
+    no "harden-vhost.sh $S FAILED (see /tmp/harden-$S.log)"; tail -25 "/tmp/harden-$S.log"
   fi
 }
 deploy_site site1 site1pass
@@ -101,10 +127,10 @@ systemctl is-active --quiet php8.1-fpm && ok "php8.1-fpm active" || no "php8.1-f
 systemctl reload nginx 2>/dev/null; ok "nginx reload"
 for S in site1 site2; do fetch "$S" "index.php" >/dev/null; done   # warm complain-mode
 for S in site1 site2; do
-  if bash scripts/enforce-vhost.sh "$S" >/tmp/enforce-$S.log 2>&1; then
+  if run_live "/tmp/enforce-$S.log" bash scripts/enforce-vhost.sh "$S"; then
     ok "enforce-vhost.sh $S exit 0"
   else
-    no "enforce-vhost.sh $S FAILED (see /tmp/enforce-$S.log)"; tail -25 /tmp/enforce-$S.log
+    no "enforce-vhost.sh $S FAILED (see /tmp/enforce-$S.log)"; tail -25 "/tmp/enforce-$S.log"
   fi
 done
 echo "--- aa-status php-fpm hats (want enforce) ---"
@@ -114,7 +140,7 @@ assert "site1 hat in enforce" "${mode1:-none}" "enforce"
 
 # ---------------------------------------------------------------------------
 phase "PHASE 4 — setup-tls site1 (self-signed)"
-if bash scripts/setup-tls.sh site1 --self-signed >/tmp/tls-site1.log 2>&1; then
+if run_live /tmp/tls-site1.log bash scripts/setup-tls.sh site1 --self-signed; then
   ok "setup-tls.sh site1 --self-signed exit 0"
 else
   no "setup-tls.sh site1 FAILED (see /tmp/tls-site1.log)"; tail -25 /tmp/tls-site1.log
@@ -160,7 +186,7 @@ echo "  loaded audit rules touching php_exec/webroot: ${rules:-0}"
 
 # ---------------------------------------------------------------------------
 phase "PHASE 8 — audit verify (Lynis hardening index)"
-if bash scripts/audit-os.sh --verify >/tmp/audit-verify.log 2>&1; then
+if run_live /tmp/audit-verify.log bash scripts/audit-os.sh --verify; then
   idx=$(grep -oiE 'hardening.?index[^0-9]*[0-9]+' /tmp/audit-verify.log | grep -oE '[0-9]+' | tail -1)
   ok "audit-os.sh --verify exit 0 (Lynis index: ${idx:-?})"
 else
