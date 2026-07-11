@@ -184,6 +184,74 @@ nginx_nophp_rebuild() {                          # SITE
   fi
 }
 
+# --- extension write-denies (opt-in, granular per dir) -----------------------
+# Deny WRITING chosen file extensions in chosen dirs via the AppArmor hat, so a
+# webshell can't even LAND on disk there (deny beats the reach allow, and covers
+# create + the rename/link target). Granular on purpose: some apps legitimately
+# write .php into a writable dir (Joomla's log guard `error.php`, template-cache
+# compilation), so the operator chooses which dir AND which extensions.
+# State: noext.rules — one "<dir>\t<ext1,ext2,...>" line per dir.
+
+# Case-insensitive AARE token for one extension: php -> [pP][hH][pP], php5 -> [pP][hH][pP]5.
+# (AppArmor has no case-insensitive flag; nginx `~*` already blocks .PHP exec, but
+# denying the WRITE case-insensitively stops a mixed-case shell from landing too.)
+_aare_ci() {                                     # ext -> token
+  local ext="$1" out="" i ch up lo
+  for (( i=0; i<${#ext}; i++ )); do
+    ch="${ext:i:1}"
+    up="$(printf '%s' "$ch" | tr '[:lower:]' '[:upper:]')"
+    lo="$(printf '%s' "$ch" | tr '[:upper:]' '[:lower:]')"
+    if [ "$up" != "$lo" ]; then out+="[${lo}${up}]"; else out+="$ch"; fi
+  done
+  printf '%s' "$out"
+}
+
+# Normalise an extension list: lower-case, strip dots/spaces, comma-join, dedupe.
+_noext_norm() {                                  # "PHP, .phtml  phar" -> "php,phtml,phar"
+  printf '%s' "$1" | tr 'A-Z ' 'a-z,' | tr -s ',' | sed 's/\.//g; s/^,//; s/,$//' \
+    | tr ',' '\n' | awk '!seen[$0]++ && NF' | paste -sd, -
+}
+
+noext_set() {                                    # SITE DIR EXTS(comma/space-sep)
+  local site="$1" dir="${2%/}" exts d f tmp
+  refuse_bad_path "$dir" "noext dir"
+  exts="$(_noext_norm "$3")"
+  [ -n "$exts" ] || die "no valid extensions in '$3'"
+  d="$(policy_state_dir "$site")"; mkdir -p "$d"; f="$d/noext.rules"; touch "$f"
+  tmp="$(mktemp)"; awk -F'\t' -v D="$dir" '$1!=D' "$f" > "$tmp" || true
+  printf '%s\t%s\n' "$dir" "$exts" >> "$tmp"; mv "$tmp" "$f"
+}
+
+noext_unset() {                                  # SITE DIR
+  local site="$1" dir="${2%/}" f tmp
+  f="$(policy_state_dir "$site")/noext.rules"; [ -f "$f" ] || return 0
+  tmp="$(mktemp)"; awk -F'\t' -v D="$dir" '$1!=D' "$f" > "$tmp" || true; mv "$tmp" "$f"
+}
+
+noext_rebuild() {                                # SITE — regenerate the hat's noext region
+  local site="$1" d hat block="" dir exts ext
+  d="$(policy_state_dir "$site")"
+  hat="${APPARMOR_D}/${site}"
+  [ -f "$hat" ] || return 0
+  if [ -f "$d/noext.rules" ]; then
+    while IFS=$'\t' read -r dir exts; do
+      [ -n "$dir" ] && [ -n "$exts" ] || continue
+      block+="  # ${dir}: deny writing [${exts}] (case-insensitive; blocks create + rename target)"$'\n'
+      local -a earr; IFS=',' read -ra earr <<< "$exts"
+      for ext in "${earr[@]}"; do
+        [ -n "$ext" ] || continue
+        block+="  deny ${dir}/**.$(_aare_ci "$ext") w,"$'\n'
+      done
+    done < "$d/noext.rules"
+  fi
+  [ -z "$block" ] && block="  # (no extension write-denies configured — add with tune-vhost.sh noext-add)"
+  # On a legacy hat lacking the marker, insert the region INSIDE the profile
+  # (before the permits region), never at EOF where it would fall outside `}`.
+  _ensure_region_before_anchor "$hat" "noext" 'hardening:permits'
+  write_region "$hat" "noext" "${block%$'\n'}"
+  apparmor_reload "/etc/apparmor.d/php-fpm"
+}
+
 # --- egress ------------------------------------------------------------------
 
 egress_allow() {                                # SITE FRAGMENT [4|6]

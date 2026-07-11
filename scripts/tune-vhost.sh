@@ -14,6 +14,9 @@
 #   tune-vhost.sh <SITE> grant-write <path>
 #   tune-vhost.sh <SITE> grant-read  <path>
 #   tune-vhost.sh <SITE> revoke      <path>
+#   tune-vhost.sh <SITE> noext-add   <dir> <ext,ext,...>  # deny writing those
+#                                                 # extensions in <dir> (AppArmor)
+#   tune-vhost.sh <SITE> noext-del   <dir>
 #   tune-vhost.sh <SITE> set   <key> <value>      # memory_limit, upload_max_filesize,
 #                                                 # allow_url_fopen, MemoryMax, CPUQuota,
 #                                                 # pm.max_children, pm.max_requests, ...
@@ -73,6 +76,20 @@ case "$ACTION" in
     path="${1:?path}"
     log "revoke '$path' from $SITE"
     if [ $DRY -eq 0 ]; then reach_remove "$SITE" "$path"; reach_rebuild "$SITE"; fi
+    ;;
+
+  noext-add)
+    dir="${1:?dir}"; exts="${2:?exts (comma/space-separated, e.g. php,phtml,phar)}"
+    grep -qxF "$dir" "$(policy_state_dir "$SITE")/reach-rw.paths" 2>/dev/null || \
+      warn "'$dir' is not a runtime-writable dir of $SITE — the deny will have no effect until it is (grant-write)."
+    log "noext $SITE: DENY writing [$exts] in $dir (AppArmor hat)"
+    if [ $DRY -eq 0 ]; then noext_set "$SITE" "$dir" "$exts"; noext_rebuild "$SITE"; fi
+    ;;
+
+  noext-del)
+    dir="${1:?dir}"
+    log "noext $SITE: remove extension write-deny for $dir"
+    if [ $DRY -eq 0 ]; then noext_unset "$SITE" "$dir"; noext_rebuild "$SITE"; fi
     ;;
 
   set)
@@ -166,6 +183,10 @@ case "$ACTION" in
     echo "-- open_basedir --";  grep 'open_basedir' "$POOL" 2>/dev/null || true
     echo "-- reach (rw) --";    cat "$(policy_state_dir "$SITE")/reach-rw.paths" 2>/dev/null || true
     echo "-- reach (ro) --";    cat "$(policy_state_dir "$SITE")/reach-ro.paths" 2>/dev/null || true
+    echo "-- ext write-denies (dir -> extensions) --"
+    if [ -s "$(policy_state_dir "$SITE")/noext.rules" ]; then
+      sed 's/\t/  ->  /' "$(policy_state_dir "$SITE")/noext.rules"
+    else echo "(none)"; fi
     echo "-- egress v4 --";     cat "$(policy_state_dir "$SITE")/egress-v4.allow" 2>/dev/null || true
     echo "-- egress v6 --";     cat "$(policy_state_dir "$SITE")/egress-v6.allow" 2>/dev/null || true
     ;;

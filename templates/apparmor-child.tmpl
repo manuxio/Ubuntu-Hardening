@@ -40,6 +40,13 @@ profile @@SITE@@ flags=(complain,attach_disconnected) {
   # (populated by lib/policy.sh via harden-vhost.sh / tune-vhost.sh)
 # <<< hardening:reach <<<
 
+  # --- opt-in extension write-denies (granular; tune-vhost.sh noext-add) -----
+  # deny rules win over the reach grants above, so a chosen extension cannot be
+  # written/created/renamed-to in a chosen dir (webshell can't even land there).
+# >>> hardening:noext >>>
+  # (managed by lib/policy.sh — empty unless you add noext rules)
+# <<< hardening:noext <<<
+
   # --- manual permits granted from soak denials (add-aa-permit.sh) ----------
 # >>> hardening:permits >>>
   # (managed by add-aa-permit.sh — do not edit by hand)

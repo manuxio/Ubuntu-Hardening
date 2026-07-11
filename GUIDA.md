@@ -303,6 +303,18 @@ proprietari reali; i grant/revoke avvengono scegliendo dai path esistenti
 Un grant qui aggiorna **contemporaneamente** `open_basedir`, l'hat AppArmor e
 `ReadWritePaths` di systemd (il "principio di sincronizzazione", §2.1).
 
+Le ultime due voci — **VIETA scrittura di estensioni** / **Rimuovi un divieto** —
+attivano un deny **AppArmor** *granulare*: in una cartella scelta il worker non
+può creare (né rinominare in) file con le estensioni indicate (default
+`php,phtml,phar,php5,php7,phps,pht`). È il secondo livello oltre al blocco nginx:
+lì nginx impedisce di *eseguire* una webshell, qui AppArmor impedisce che
+*atterri su disco*. La granularità è necessaria perché alcune app scrivono `.php`
+legittimi in certe cartelle scrivibili (Joomla scrive `error.php` come log in
+`logs/`, la compilazione dei template scrive PHP in `cache/`): **applica il
+divieto solo alle cartelle di puro upload** (es. `images/`, `media/`), mai a
+`logs/` o `cache/`. Il divieto è case-insensitive (blocca anche `.PHP`) e viene
+mostrato nel riepilogo della schermata come `DIVIETI ESTENSIONI`.
+
 **Egress** — mostra le destinazioni consentite in uscita per l'uid del sito;
 tutto il resto è REJECT:
 
@@ -662,6 +674,12 @@ sudo tune-vhost.sh web_user list                          # (vedi 'show')
 sudo tune-vhost.sh web_user grant-write /var/www/html/web_user/shared
 sudo tune-vhost.sh web_user grant-read  /srv/dati-comuni
 sudo tune-vhost.sh web_user revoke      /var/www/html/web_user/shared
+
+# Divieto AppArmor granulare: niente scrittura di .php (ecc.) in una dir di upload
+# (una webshell non riesce nemmeno a crearsi lì; copre anche il rename -> .php).
+# NON usarlo dove l'app scrive .php legittimi (log Joomla in logs/, cache template).
+sudo tune-vhost.sh web_user noext-add /var/www/html/web_user/public_html/images php,phtml,phar
+sudo tune-vhost.sh web_user noext-del /var/www/html/web_user/public_html/images
 
 # Impostazioni pool / cgroup
 sudo tune-vhost.sh web_user set memory_limit 512M

@@ -126,6 +126,11 @@ but keeps this ownership/setgid model.
    where mounted separately; PHP execution disabled in upload dirs.
 3. **AppArmor** — master profile + per-pool **child hat** (`php-fpm//<site>`)
    that grants **no `x` anywhere** → worker can exec no external binary at all.
+   Optional, granular `hardening:noext` region (`tune-vhost.sh noext-add <dir>
+   <exts>`): `deny <dir>/**.<ext> w,` blocks *writing* chosen extensions in
+   chosen dirs (webshell can't land; covers rename target; case-insensitive).
+   Per-dir on purpose — some apps write legit `.php` into writable dirs (Joomla
+   `logs/error.php`, template-cache compilation), so scope it to upload-only dirs.
 4. **Egress firewall by uid** — `-m owner --uid-owner <site>` default-REJECT,
    allowing only DNS, DB, mail relay, 443. Defeats `wget`/reverse-shell/miner.
 5. **systemd sandbox / cgroup** — `ProtectSystem=strict`, `PrivateTmp`,

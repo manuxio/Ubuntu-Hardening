@@ -174,7 +174,7 @@ egress_summary() {  # egress_summary <site> -> allowed destinations + note
   fi
 }
 dir_summary() {  # dir_summary <site> -> read/write reach paths with permissions
-  local s="$1" p D                      # NB: D on its own line — $s isn't set yet
+  local s="$1" p e D                    # NB: D on its own line — $s isn't set yet
   D="/etc/hardening/sites/$s"           # inside a single `local` (bash expands first)
   echo "SCRIVIBILI dall'utente runtime:"
   if [ -s "$D/reach-rw.paths" ]; then
@@ -186,6 +186,10 @@ dir_summary() {  # dir_summary <site> -> read/write reach paths with permissions
     while IFS= read -r p; do [ -n "$p" ] && printf '  %s  %s\n' \
       "$(stat -c '%A %U:%G' "$p" 2>/dev/null || echo '(assente)')" "$p"; done < "$D/reach-ro.paths"
   else echo "  (nessuna)"; fi
+  if [ -s "$D/noext.rules" ]; then
+    echo "DIVIETI ESTENSIONI (no-write via AppArmor):"
+    while IFS=$'\t' read -r p e; do [ -n "$p" ] && printf '  %s  ->  .%s\n' "$p" "${e//,/ .}"; done < "$D/noext.rules"
+  fi
 }
 
 # --- modify groups: each loops (you stay in it) and shows current state -----
@@ -210,6 +214,16 @@ pick_grant_candidate() {  # pick_grant_candidate <site> "<VERB>" -> chosen path 
   fi
   items+=("__CUSTOM" "Altro: digita un path personalizzato...")
   ui_menu "$verb: scegli una cartella (del docroot, non ancora concessa) o 'Altro':" "${items[@]}"
+}
+pick_noext_dir() {  # pick_noext_dir <site> "<title>" -> a dir that has an ext-deny rule
+  local s="$1" title="$2" dir exts D="/etc/hardening/sites/$1"; local -a items=()
+  if [ -f "$D/noext.rules" ]; then
+    while IFS=$'\t' read -r dir exts; do
+      [ -n "$dir" ] && items+=("$dir" "$dir  (.${exts//,/ .})")
+    done < "$D/noext.rules"
+  fi
+  [ ${#items[@]} -eq 0 ] && { ui_msg "Nessun divieto di estensioni configurato per '$s'."; return 1; }
+  ui_menu "$title" "${items[@]}"
 }
 
 mod_nginx() {  # mod_nginx <site> — domains (server_name+aliases) and enable/disable
@@ -262,6 +276,8 @@ $(dir_summary "$s")" \
       gwrite "Concedi SCRITTURA su una cartella" \
       gread  "Concedi (sola) LETTURA su una cartella" \
       revoke "REVOCA un path (scegli dall'elenco attuale)" \
+      noext  "VIETA scrittura di estensioni in una cartella (es. .php negli upload)" \
+      noextd "Rimuovi un divieto di estensioni" \
       back   "<< Indietro")" || return
     case "$op" in
       gwrite|gread)
@@ -273,6 +289,18 @@ $(dir_summary "$s")" \
       revoke)
         p="$(pick_reach_path "$s" all "Quale path REVOCARE? (scegli tra quelli concessi ora)")" || continue
         [ -n "$p" ] && tune_apply "$s" revoke "$p" ;;
+      noext)
+        p="$(pick_reach_path "$s" rw "In quale cartella VIETARE la scrittura di certe estensioni?")" || continue
+        [ -n "$p" ] || continue
+        e="$(ui_input "Estensioni da NEGARE in scrittura in
+  $p
+(separate da virgola; una webshell non potra' nemmeno crearsi qui).
+NB: NON metterle dove l'app scrive .php legittimi (es. log Joomla, cache template)." \
+          "php,phtml,phar,php5,php7,phps,pht")" || continue
+        [ -n "$e" ] && tune_apply "$s" noext-add "$p" "$e" ;;
+      noextd)
+        p="$(pick_noext_dir "$s" "Da quale cartella TOGLIERE il divieto di estensioni?")" || continue
+        [ -n "$p" ] && tune_apply "$s" noext-del "$p" ;;
       back)   return ;;
     esac
   done
