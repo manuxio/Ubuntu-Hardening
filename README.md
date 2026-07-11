@@ -48,6 +48,10 @@ cd Ubuntu-Hardening
 
 ## Quick start (on the server)
 
+> **Prefer a menu?** `sudo bash scripts/harden-menu.sh` opens a small
+> whiptail TUI that drives every step below (audit, harden OS, add a site,
+> enforce, TLS, tune, run the E2E test) — no commands to memorise.
+
 ```bash
 # 0) copy this repo to the server (e.g. rsync/scp/tar), then cd into it
 
@@ -117,6 +121,7 @@ See [`PLAN.md`](PLAN.md) §Test.
 
 | Script | Purpose |
 |---|---|
+| `scripts/harden-menu.sh` | **interactive whiptail menu** that drives all the scripts below |
 | `scripts/harden-os.sh` | server-wide layer (once) |
 | `scripts/harden-vhost.sh` | per-site setup (user, pool, hat, nginx, egress, auditd) |
 | `scripts/enforce-vhost.sh` | complain → enforce, with soak check + auto-rollback |

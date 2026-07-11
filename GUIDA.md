@@ -103,6 +103,12 @@ codice non scrivibile dall'utente runtime**:
 
 ## 5. Installazione passo-passo (server reale)
 
+> **Preferisci un menu?** `sudo bash scripts/harden-menu.sh` apre una piccola
+> TUI (whiptail) che guida tutti i passi qui sotto — audit, hardening OS, nuovo
+> sito, enforce, TLS, tuning egress, test end-to-end — senza comandi da
+> ricordare. Fa da orchestratore: ogni voce lancia lo script corrispondente e ne
+> mostra l'output dal vivo. `--check` esegue un self-test non interattivo.
+
 ### 5.0 Audit e misura (Lynis · Trivy · OpenSCAP) — fase preliminare consigliata
 
 Misura **prima e dopo** l'hardening con strumenti standard. Sono read-only
