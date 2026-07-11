@@ -102,6 +102,70 @@ if ($tmpWrite !== false) { @unlink($tmpProbe); }
 chk('Filesystem', 'Writable temp works',
     ($tmpWrite !== false) ? S_PASS : S_WARN, $tmpDir . (($tmpWrite !== false) ? ' (writable)' : ' (NOT writable)'));
 
+/* ------------------------------------------------ webshell drop (writable dirs) */
+/* The core horizontal-risk vector: can a .php be DROPPED into a runtime-writable
+ * dir, and if that dir is web-served, does nginx REFUSE to execute it? Tested from
+ * inside the worker for every writable open_basedir dir:
+ *   - .php write DENIED           -> PASS (AppArmor noext deny: it can't even land)
+ *   - .php writes, nginx 403      -> PASS (execution blocked; a noext deny would also stop the drop)
+ *   - .php writes, nginx 200      -> FAIL (a dropped shell EXECUTES / source is disclosed)
+ *   - .php writes, dir not served -> INFO (e.g. tmp/logs — not a direct HTTP vector)
+ * The probe is NON-dotfile on purpose: nginx denies all dotfiles, which would mask
+ * the writable-dir PHP rule we actually want to exercise. */
+$docroot = rtrim((string)($_SERVER['DOCUMENT_ROOT'] ?? ''), '/');
+$host    = (string)($_SERVER['HTTP_HOST'] ?? '');
+$rand    = bin2hex(random_bytes(4));
+
+/* one loopback HTTP(S) self-request; returns the status code or null. Uses the
+ * same scheme this page was served over, so a TLS-forced site is hit on :443. */
+$loopback = function (string $path) use ($host, $scheme_https): ?int {
+    if ($host === '' || !function_exists('stream_socket_client')) return null;
+    $tgt = ($scheme_https ? 'tls://' : 'tcp://') . '127.0.0.1:' . ($scheme_https ? '443' : '80');
+    $ctx = stream_context_create(['ssl' => ['verify_peer' => false, 'verify_peer_name' => false, 'peer_name' => $host]]);
+    $fp = @stream_socket_client($tgt, $e, $s, 4, STREAM_CLIENT_CONNECT, $ctx);
+    if (!$fp) return null;
+    @fwrite($fp, "GET {$path} HTTP/1.1\r\nHost: {$host}\r\nConnection: close\r\nUser-Agent: hardening-check\r\n\r\n");
+    $resp = ''; $t0 = microtime(true);
+    while (!feof($fp) && strlen($resp) < 4096 && microtime(true) - $t0 < 4) {
+        $c = @fread($fp, 2048); if ($c === '' || $c === false) break; $resp .= $c;
+    }
+    @fclose($fp);
+    return preg_match('#^HTTP/\d\.\d\s+(\d{3})#', $resp, $m) ? (int)$m[1] : null;
+};
+
+$obdDirs = array_filter(array_map('trim', explode(PATH_SEPARATOR, (string)ini_get('open_basedir'))));
+$anyWritable = false;
+foreach ($obdDirs as $dir) {
+    $dir = rtrim($dir, '/');
+    if ($dir === '' || $dir === $docroot) continue;              // docroot = code, tested above
+    $ctl = "$dir/.hchk_{$rand}.txt";
+    if (@file_put_contents($ctl, 'x') === false) continue;       // not writable -> not a drop target
+    @unlink($ctl);
+    $anyWritable = true;
+    $underDoc = $docroot !== '' && strncmp($dir . '/', $docroot . '/', strlen($docroot) + 1) === 0;
+    $label = $underDoc ? (substr($dir, strlen($docroot)) ?: '/') : $dir;
+
+    $php = "$dir/hchk_probe_{$rand}.php";                         // NON-dotfile (see note)
+    $dropped = @file_put_contents($php, '<?php /* hardening-check probe */ echo "HCHK_PROBE_RAN";') !== false;
+    if (!$dropped) {
+        chk('Webshell drop', $label, S_PASS, '.php write DENIED (AppArmor noext) — a webshell cannot land here');
+        continue;
+    }
+    if (!$underDoc) {
+        chk('Webshell drop', $label, S_INFO, '.php writable, but dir is NOT web-served — not a direct HTTP webshell vector');
+    } else {
+        $code = $loopback(substr($dir, strlen($docroot)) . "/hchk_probe_{$rand}.php");
+        if ($code === 403)        chk('Webshell drop', $label, S_PASS, '.php can be written but nginx returns 403 (not executed). Add a noext deny to also stop the drop.');
+        elseif ($code === 200)    chk('Webshell drop', $label, S_FAIL, 'DANGER: a dropped .php is served/executed here (HTTP 200) — the nginx nophp deny is missing');
+        elseif ($code === null)   chk('Webshell drop', $label, S_WARN, '.php can be written; execution self-test inconclusive — verify it returns 403 (deploy-test.sh)');
+        else                      chk('Webshell drop', $label, S_WARN, ".php can be written; nginx returned HTTP $code (expected 403) — check routing");
+    }
+    @unlink($php);
+}
+if (!$anyWritable) {
+    chk('Webshell drop', 'writable dirs', S_INFO, 'no writable open_basedir dir found to probe');
+}
+
 /* ---------------------------------------------------------------- session */
 foreach (['session.cookie_httponly' => 'cookie_httponly',
           'session.use_strict_mode' => 'use_strict_mode',

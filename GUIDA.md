@@ -818,6 +818,15 @@ scrittura nel codice (deve **fallire**) vs in tmp (deve **riuscire**), hardening
 sessione, limiti risorse, egress in uscita, confinamento AppArmor e (opzionale)
 connessione DB. Risponde anche a `X-Robots-Tag: noindex`.
 
+Include anche il gruppo **Webshell drop**: per ogni cartella scrivibile prova —
+*dall'interno del worker* — a creare una `.php` e, se la cartella è servita dal
+web, fa un **self-request in loopback** per vedere cosa risponde nginx. Verdetti:
+`.php` negata in scrittura → **PASS** (deny AppArmor noext); `.php` scrivibile ma
+nginx **403** → **PASS** (esecuzione bloccata, valuta comunque un noext);
+`.php` scrivibile ed **eseguita (200)** → **FAIL** (manca il deny nginx); cartella
+non servita (tmp/log) → **INFO**. Copre così, in un colpo solo, sia il blocco
+nginx (§5.6) sia il deny per-estensione (§5.5).
+
 > **Non lasciarlo online.** Rivela la postura di hardening e il test DB accetta
 > host arbitrari (vettore SSRF). È usa-e-elimina. Per un endpoint ricorrente usa
 > la variante gated §9.2. (Nota: contenendo `system()`+input HTTP, fa scattare la
