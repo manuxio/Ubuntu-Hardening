@@ -203,7 +203,7 @@ action_newvhost() {
   while true; do
     sel="$(ui_menu "Nuovo sito '$SITE' — rivedi/modifica, poi CREA:" \
       SITE                "Nome sito             = $SITE" \
-      SERVER_NAME         "server_name (nginx)   = $SERVER_NAME" \
+      SERVER_NAME         "Domini (nginx + cert) = $SERVER_NAME" \
       DOCROOT             "Docroot               = $DOCROOT" \
       RUNTIME_USER        "Utente runtime        = $RUNTIME_USER" \
       WEB_USER            "Identita codice/FTP   = $WEB_USER" \
@@ -236,6 +236,9 @@ action_newvhost() {
           RUNTIME_USER="$SITE"; TMP_PATH="/var/www/html/${SITE}/tmp"
           SESSION_PATH="/var/www/html/${SITE}/sessions"; LOG_PATH="/var/www/html/${SITE}/logs"
         fi ;;
+      SERVER_NAME)
+        newv="$(ui_input "Domini del sito separati da spazio: il 1o e' il principale, gli altri gli alias (es: www.xxx.com xxx.com). Vanno in nginx server_name e nei certificati TLS." "$SERVER_NAME")" || continue
+        [ -n "$newv" ] && SERVER_NAME="$newv" ;;
       *) cur="${!sel}"; newv="$(ui_input "$sel:" "$cur")" || continue
          printf -v "$sel" '%s' "$newv" ;;
     esac

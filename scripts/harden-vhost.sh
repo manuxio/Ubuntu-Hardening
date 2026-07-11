@@ -22,7 +22,7 @@ require_root
 # --- Gather inputs -----------------------------------------------------------
 prompt SITE          "Short site name (pool/hat/socket id)"      "web_user"
 [[ "$SITE" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || die "SITE must be [a-z0-9_-], got '$SITE'"
-prompt SERVER_NAME   "Server name(s) for the nginx block"        "${SITE}.local"
+prompt SERVER_NAME   "Site domains (primary + aliases, space-sep; -> nginx server_name + TLS cert)" "${SITE}.local"
 prompt DOCROOT       "Document root (docroot)"                   "/var/www/html/${SITE}/public_html"
 DOCROOT="${DOCROOT%/}"
 prompt RUNTIME_USER  "PHP-FPM runtime user"                      "$SITE"

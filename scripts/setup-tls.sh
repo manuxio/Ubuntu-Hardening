@@ -46,10 +46,13 @@ HSTS='# HSTS omitted for a self-signed cert'
 if [ "$MODE" = self-signed ]; then
   SSLDIR="/etc/nginx/ssl/${SITE}"; mkdir -p "$SSLDIR"
   TLS_CERT="$SSLDIR/fullchain.pem"; TLS_KEY="$SSLDIR/privkey.pem"
-  log "generating self-signed cert for $PRIMARY (365d)"
+  # SAN covers EVERY name in server_name (primary + aliases), so the cert is
+  # valid for all of them, not just the first.
+  SAN=""; for d in $SERVER_NAME; do SAN="${SAN:+$SAN,}DNS:$d"; done
+  log "generating self-signed cert for: $SERVER_NAME (365d)"
   openssl req -x509 -newkey rsa:2048 -sha256 -days 365 -nodes \
     -keyout "$TLS_KEY" -out "$TLS_CERT" \
-    -subj "/CN=${PRIMARY}" -addext "subjectAltName=DNS:${PRIMARY}" >/dev/null 2>&1
+    -subj "/CN=${PRIMARY}" -addext "subjectAltName=${SAN}" >/dev/null 2>&1
   chmod 600 "$TLS_KEY"
 else
   command -v certbot >/dev/null 2>&1 || die "certbot not installed — run harden-os.sh (or: apt install certbot)"
