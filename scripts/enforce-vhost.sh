@@ -180,7 +180,7 @@ if [ "$DRY" -eq 1 ]; then
   exit 0
 fi
 [ "$WITH_MASTER" -eq 1 ] && warn "the MASTER profile is shared — enforcing it affects every pool without its own hat."
-confirm "Enforce AppArmor for '$SITE'${WITH_MASTER:+ (+master)}? A broken worker auto-reverts to complain." || { log "aborted."; exit 0; }
+confirm "Enforce AppArmor for '$SITE'$([ "$WITH_MASTER" -eq 1 ] && printf ' (+master)')? A broken worker auto-reverts to complain." || { log "aborted."; exit 0; }
 
 # --- flip to enforce ---------------------------------------------------------
 log "enforcing $TARGETS"
