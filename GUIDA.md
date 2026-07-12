@@ -4,9 +4,14 @@ Guida operativa in italiano per installare, testare e gestire l'hardening di un
 server Ubuntu che ospita più siti PHP (Joomla, WordPress e simili) dietro
 **nginx + PHP-FPM**.
 
-> Documentazione collegata: `README.md` (avvio rapido), `CLAUDE.md` (contesto
-> tecnico), `PLAN.md` (piano di build e strategia di test),
+> Documentazione collegata: [`example.md`](example.md) (**walkthrough completo
+> con screenshot**, da OS pulito a sito in enforce), `README.md` (avvio rapido),
+> `CLAUDE.md` (contesto tecnico), `PLAN.md` (piano di build e strategia di test),
 > `apache-php-hardening-runbook.md` (razionale completo per fasi).
+>
+> **Per amministratori di sistema**: la sezione **§13** mappa *dove vivono i dati*
+> e *cosa è live vs cosa va ricaricato*; le tabelle "⚙️ Sotto il cofano" in §5
+> dicono quale script/file ogni voce di menu tocca.
 
 ---
 
@@ -147,85 +152,44 @@ sudo bash ~/hardening/scripts/harden-menu.sh
 Il menu principale tiene solo le operazioni globali e le due voci per i siti —
 **Crea sito** e **Gestisci siti**:
 
-```text
-┌─────────────────────────────┤ Ubuntu Hardening ├─────────────────────────────┐
-│ Server: ubuntu · scegli un'azione:                                           │
-│                                                                              │
-│               Audit: baseline sicurezza (Lynis)                              │
-│               Hardening del sistema operativo (una volta)                    │
-│               Audit: verifica + delta (Lynis)                                │
-│               Scan CVE dei pacchetti (Trivy)                                 │
-│               Audit conformità CIS (OpenSCAP)                                │
-│               Crea sito                                                       │
-│               Gestisci siti                                                  │
-│               Test end-to-end (ATTENZIONE: crea site1/site2!)                │
-│               Esci                                                           │
-│                                                                              │
-│                     <Ok>                         <Cancel>                    │
-└──────────────────────────────────────────────────────────────────────────────┘
-```
+![Menu principale](docs/img/01-menu-principale.png)
 
-- Le prime cinque voci sono **audit e hardening globali** (una tantum per
-  server): baseline Lynis, hardening OS, verify Lynis, scan CVE Trivy,
-  compliance CIS.
-- **Crea sito** e **Gestisci siti** sono il cuore dell'uso quotidiano.
-- **Test end-to-end** provisiona due siti usa-e-getta (`site1`/`site2`) e
-  verifica l'isolamento incrociato — utile in laboratorio, **non** su
-  produzione (l'avviso è esplicito).
+Ogni voce è un semplice *wrapper* attorno a uno script: il menu non contiene
+logica propria, lancia lo script (visibile nell'output come `==> bash …`) e ne
+mostra il risultato. **Cosa fa ogni voce, sotto il cofano:**
+
+| Voce | Script | Effetto tecnico | Dove scrive |
+|---|---|---|---|
+| Audit: baseline (Lynis) | `audit-os.sh --baseline` | esegue `lynis audit system` (read-only) | report in `/var/log/hardening-audit/lynis-baseline.txt` |
+| Hardening del sistema operativo | `harden-os.sh` | layer globale (UFW, AppArmor master, auditd, sysctl, YARA-X…) | `/etc/ufw`, `/etc/apparmor.d`, `/etc/audit`, `/etc/sysctl.d`, `/usr/local/bin/yr` |
+| Audit: verifica + delta | `audit-os.sh --verify` | rimisura e stampa il delta vs baseline | `/var/log/hardening-audit/lynis-verify.txt` |
+| Scan CVE (Trivy) | `scan-cve.sh` | Trivy sui pacchetti (HIGH/CRITICAL) | report in `/var/log/hardening-audit/` |
+| Audit CIS (OpenSCAP) | `audit-cis.sh` | valutazione CIS (SCAP Security Guide) | report HTML in `/var/log/hardening-audit/` |
+| Crea sito | `harden-vhost.sh` | provisiona un vhost (§5.4) | vedi §13 |
+| Gestisci siti | (sotto-menu → `tune-vhost.sh` ecc.) | operazioni day-2 (§5.5) | vedi §13 |
+| Test end-to-end | `test/tier2-e2e.sh` | crea `site1`/`site2` usa-e-getta e prova l'isolamento incrociato | siti temporanei — **non** su produzione |
+
+> Gli audit (Lynis/Trivy/OpenSCAP) sono **read-only** e scrivono solo report;
+> l'unico che modifica il sistema è *Hardening del sistema operativo*. Per la
+> mappa completa di dove vengono salvati i dati vedi **§13**.
 
 ### 5.4 Crea sito
 
 **Crea sito** chiede prima il **nome breve** del sito (usato per pool, hat
 AppArmor e utente):
 
-```text
-┌────────────────────────┤ Ubuntu Hardening ├────────────────────────┐
-│ Nome breve del nuovo sito (pool/hat/utente):                       │
-│                                                                    │
-│ web_user__________________________________________________________ │
-│                                                                    │
-│                 <Ok>                     <Cancel>                  │
-└────────────────────────────────────────────────────────────────────┘
-```
+![Crea sito — nome](docs/img/04-crea-sito-nome.png)
 
 Poi presenta una **maschera a gruppi**: personalizzi i parametri per area,
 quindi lanci la creazione. La riga `>>> CREA IL SITO <<<` mostra la modalità
 corrente (http/https):
 
-```text
-┌─────────────────────────────┤ Ubuntu Hardening ├─────────────────────────────┐
-│ Nuovo sito 'web_user' — configura per gruppi, poi CREA:                      │
-│                                                                              │
-│          Nginx / dominio     (server_name, HTTP/HTTPS)                       │
-│          File System         (docroot, utenti, dir, path)                    │
-│          PHP / Pool          (versione, memoria, limiti, workers)            │
-│          Rete / DB / Mail    (DB, SMTP, egress, cookie)                      │
-│          >>> CREA IL SITO (modalita: http) <<<                               │
-│          Annulla                                                             │
-│                                                                              │
-│                     <Ok>                         <Cancel>                    │
-└──────────────────────────────────────────────────────────────────────────────┘
-```
+![Crea sito — gruppi](docs/img/05-crea-sito-gruppi.png)
 
 Ogni gruppo elenca i campi con il **valore attuale** già compilato (default
 sensati), che puoi cambiare uno per uno — per esempio il gruppo **File System**:
 
-```text
-┌─────────────────────────────┤ Ubuntu Hardening ├─────────────────────────────┐
-│ File System — modifica un campo:                                             │
-│                                                                              │
-│        Docroot              = /var/www/html/web_user/public_html             │
-│        Utente runtime       = web_user                                       │
-│        Identita codice      = www-data                                       │
-│        Dir scrivibili       = images media cache administrator/cache         │
-│        Temp path            = /var/www/html/web_user/tmp                     │
-│        Session path         = /var/www/html/web_user/sessions                │
-│        Log path             = /var/www/html/web_user/logs                    │
-│        << Indietro                                                           │
-│                                                                              │
-│                     <Ok>                         <Cancel>                    │
-└──────────────────────────────────────────────────────────────────────────────┘
-```
+![Crea sito — File System](docs/img/06-crea-sito-filesystem.png)
 
 I quattro gruppi:
 - **Nginx / dominio** — `server_name`, alias, HTTP vs HTTPS.
@@ -239,74 +203,63 @@ Alla conferma il menu esegue `harden-vhost.sh` con le risposte e ne mostra
 l'output. Il sito nasce in AppArmor **complain** (rodaggio): vedi §6.5 per il
 passaggio a enforce.
 
+> **⚙️ Sotto il cofano — cosa crea `harden-vhost.sh`** (una volta per sito):
+> l'utente Unix runtime (uid dedicato, membro di `www-data`); il pool PHP-FPM
+> `/etc/php/<ver>/fpm/pool.d/<sito>.conf` con i `php_admin_*`; l'hat AppArmor
+> `/etc/apparmor.d/php-fpm.d/<sito>`; il server block nginx in
+> `sites-available/<sito>` (+ symlink `sites-enabled/`) e lo snippet
+> `snippets/<sito>-app.conf`; la catena egress per-uid in `/etc/ufw/before.rules`;
+> la regola auditd `/etc/audit/rules.d/site-<sito>.rules`; il drop-in systemd
+> `php<ver>-fpm.service.d/<sito>-reach.conf`. Salva inoltre lo **stato** in
+> `/etc/hardening/sites/<sito>/` (la *sorgente di verità*, §13) — incluso
+> `answers.env`, che permette di ri-generare tutto con *Aggiorna config*.
+
 ### 5.5 Gestisci siti
 
 **Gestisci siti** chiede quale sito e apre il menu di gestione day-2. Ogni voce
 è un'operazione mirata sul sito esistente:
 
-```text
-┌─────────────────────────────┤ Ubuntu Hardening ├─────────────────────────────┐
-│ Gestisci 'cef' — scegli un'operazione:                                       │
-│                                                                              │
-│           Nginx: domini (server_name), abilita/disabilita                    │
-│           HTTPS / TLS: certificato (self-signed o Let's Encrypt)             │
-│           Egress: destinazioni consentite / bloccate                         │
-│           Directory: permessi lettura / scrittura                            │
-│           Esecuzione: permessi AppArmor exec di programmi                    │
-│           PHP / Pool: memoria, limiti, workers, funzioni                     │
-│           Cookie sicuri (session.cookie_secure)                              │
-│           AppArmor: Enforce (soak -> enforce)                                │
-│           AppArmor: mostra i denial del soak                                 │
-│           Verifica isolamento del sito                                       │
-│           Scansione malware del docroot (YARA-X)                             │
-│           Test PHP: deploy / elimina pagina di test                          │
-│           Aggiorna config (applica gli ultimi template)                      │
-│           Mostra tutta la policy del sito                                    │
-│           DISTRUGGI il sito (rimuove config, NON i dati)                     │
-│           << Indietro                                                        │
-│                                                                              │
-│                     <Ok>                         <Cancel>                    │
-└──────────────────────────────────────────────────────────────────────────────┘
-```
+![Menu Gestisci siti](docs/img/09-gestisci-menu.png)
 
-Il punto chiave: **ogni sotto-menu mostra la configurazione attuale** prima di
-proporre le modifiche. Alcuni esempi.
+**⚙️ Cosa fa ogni voce, tecnicamente** (comando lanciato, file toccati, come
+viene applicato). Le voci che *modificano* la policy passano tutte da
+`tune-vhost.sh`, che aggiorna in modo atomico tutti i file coinvolti e ricarica i
+servizi giusti:
+
+| Voce | Comando | File toccati | Applicazione |
+|---|---|---|---|
+| Nginx (domini) | `tune-vhost server-name` / `site-enable`/`disable` | `sites-available/<sito>` + `meta` | `nginx -t && systemctl reload nginx` |
+| HTTPS / TLS | `setup-tls.sh` | cert (`/etc/nginx/ssl/<sito>` o `/etc/letsencrypt/live/<dom>`), server block, `cookie_secure` | reload nginx + `certbot.timer` |
+| Egress | `tune-vhost allow`/`deny` | `egress-v{4,6}.allow` → regione in `before.rules`/`before6.rules` | `ufw reload` |
+| Directory (rw/ro) | `tune-vhost grant-write`/`grant-read`/`revoke` | `reach-*.paths` → open_basedir, hat, systemd RWP, nginx nophp | reload php-fpm (**restart** se cambia RWP) + reload AppArmor/nginx |
+| Directory (divieti est.) | `tune-vhost noext-add`/`noext-del` | `noext.rules` → regione `hardening:noext` dell'hat | `apparmor_parser -r` (live) |
+| Esecuzione | `add-aa-permit.sh` | `permits.rules` → regione `hardening:permits` dell'hat | reload AppArmor |
+| PHP / Pool | `tune-vhost set`/`disable`/`enable` | `<sito>.conf` (`php_admin_*`) o drop-in cgroup | reload php-fpm (+ `daemon-reload` per i cgroup) |
+| Cookie sicuri | `tune-vhost tls-on`/`tls-off` | `<sito>.conf` (`session.cookie_secure`) | reload php-fpm |
+| AppArmor Enforce | `enforce-vhost.sh` | flag del profilo hat (complain↔enforce) | reload AppArmor + **restart** php-fpm + health-check + auto-rollback |
+| AppArmor denial | `show-aa-denials.sh` | *legge* `/var/log/audit/audit.log` | nessuna scrittura |
+| Verifica isolamento | `probe-vhost.sh` | deploy/rimozione sonda temporanea | curl via nginx, poi rimuove |
+| Scansione malware | `scan-malware.sh` | report `/var/log/hardening-audit/malware-<sito>.txt` | `yr scan` read-only |
+| Test PHP | `deploy-test.sh` (`--remove`) | copia/rimuove `hardening-check.php` + probe nel docroot | — |
+| Aggiorna config | `refresh-vhost.sh` | ri-esegue `harden-vhost` da `answers.env` (ri-rende i template) | **riporta l'hat a complain** → poi ri-enforce |
+| Mostra policy | `tune-vhost show` | *legge* lo stato | nessuna scrittura |
+| DISTRUGGI | `destroy-vhost.sh` | rimuove pool/hat/nginx/egress/auditd/systemd/stato + utente | **mantiene** docroot, file caricati e DB |
+
+Il punto chiave dell'interfaccia: **ogni sotto-menu mostra la configurazione
+attuale** prima di proporre le modifiche, così l'amministratore verifica lo stato
+reale e fa modifiche mirate. Alcuni esempi.
 
 **Directory** — elenca le cartelle scrivibili e in sola lettura con permessi e
 proprietari reali; i grant/revoke avvengono scegliendo dai path esistenti
 (niente digitazione alla cieca):
 
-```text
-┌─────────────────────────────┤ Ubuntu Hardening ├─────────────────────────────┐
-│ Directory di 'cef':                                                          │
-│                                                                              │
-│ SCRIVIBILI dall'utente runtime:                                              │
-│   drwxrws--- www-data:www-data  /var/www/html/cef/public_html/images         │
-│   drwxrws--- www-data:www-data  /var/www/html/cef/public_html/media          │
-│   drwxrws--- www-data:www-data  /var/www/html/cef/public_html/cache          │
-│   drwxrws--- www-data:www-data                                               │
-│ /var/www/html/cef/public_html/administrator/cache                            │
-│   drwxrws--- www-data:www-data  /var/www/html/cef/tmp                        │
-│   drwxrws--- www-data:www-data  /var/www/html/cef/sessions                   │
-│   drwxrws--- www-data:www-data  /var/www/html/cef/logs                       │
-│ SOLA LETTURA:                                                                │
-│   drwxr-x--- www-data:www-data  /var/www/html/cef/public_html                │
-│ DIVIETI ESTENSIONI (no-write via AppArmor):                                  │
-│   /var/www/html/cef/public_html/images  ->  .php .phtml .phar                │
-│                                                                              │
-│    Concedi SCRITTURA su una cartella                                         │
-│    Concedi (sola) LETTURA su una cartella                                    │
-│    REVOCA un path (scegli dall'elenco attuale)                               │
-│    VIETA scrittura di estensioni in una cartella (es. .php negli upload)     │
-│    Rimuovi un divieto di estensioni                                          │
-│    << Indietro                                                               │
-│                                                                              │
-│                     <Ok>                         <Cancel>                    │
-└──────────────────────────────────────────────────────────────────────────────┘
-```
+![Directory — con divieti estensioni](docs/img/16-directory-noext.png)
 
-Un grant qui aggiorna **contemporaneamente** `open_basedir`, l'hat AppArmor e
-`ReadWritePaths` di systemd (il "principio di sincronizzazione", §2.1).
+Un grant qui aggiorna **contemporaneamente** `open_basedir`, l'hat AppArmor,
+`ReadWritePaths` di systemd e il deny PHP di nginx (il "principio di
+sincronizzazione", §2.1). I valori mostrati (permessi, owner) sono letti **dal
+vivo** con `stat`; l'elenco delle cartelle viene dai file di stato
+`reach-rw.paths`/`reach-ro.paths`.
 
 Le ultime due voci — **VIETA scrittura di estensioni** / **Rimuovi un divieto** —
 attivano un deny **AppArmor** *granulare*: in una cartella scelta il worker non
@@ -323,73 +276,19 @@ mostrato nel riepilogo della schermata come `DIVIETI ESTENSIONI`.
 **Egress** — mostra le destinazioni consentite in uscita per l'uid del sito;
 tutto il resto è REJECT:
 
-```text
-┌─────────────────────────────┤ Ubuntu Hardening ├─────────────────────────────┐
-│ Egress di 'cef':                                                             │
-│                                                                              │
-│ CONSENTITE (uscita per uid del sito):                                        │
-│   risposte a connessioni gia' aperte                                         │
-│   -o lo                                                                       │
-│   -p udp --dport 53                                                          │
-│   -p tcp --dport 53                                                          │
-│   -d 127.0.0.1 -p tcp --dport 3306                                           │
-│   -- tutto il resto: BLOCCATO (REJECT) --                                    │
-│                                                                              │
-│                     APRI una destinazione (host:porta)                       │
-│                     CHIUDI una destinazione                                  │
-│                     << Indietro                                              │
-│                                                                              │
-│                     <Ok>                         <Cancel>                    │
-└──────────────────────────────────────────────────────────────────────────────┘
-```
+![Egress — allow-list](docs/img/19-egress-dopo.png)
 
 **PHP / Pool** — mostra i valori correnti inline; li cambi o gestisci
 `disable_functions` (disabiliti/riabiliti una funzione senza doverle riscrivere
 tutte):
 
-```text
-┌─────────────────────────────┤ Ubuntu Hardening ├─────────────────────────────┐
-│ PHP / Pool di 'cef' — scegli cosa cambiare:                                  │
-│                                                                              │
-│                       memory_limit         = 256M                            │
-│                       max_execution_time   = 60                              │
-│                       upload_max_filesize  = 32M                             │
-│                       post_max_size        = 32M                             │
-│                       pm.max_children      = 10                              │
-│                       pm.max_requests      = 500                             │
-│                       allow_url_fopen      = off                             │
-│                       display_errors       = off                             │
-│                       expose_php           = off                             │
-│                       MemoryMax (cgroup)   =                                 │
-│                       CPUQuota (cgroup)    =                                 │
-│                       TasksMax (cgroup)    =                                 │
-│                       Disabilita una funzione PHP ...                        │
-│                       Riabilita una funzione PHP ...                         │
-│                       << Indietro                                            │
-│                                                                              │
-│                     <Ok>                         <Cancel>                    │
-└──────────────────────────────────────────────────────────────────────────────┘
-```
+![PHP / Pool — valori correnti inline](docs/img/32-php-submenu.png)
 
 **Esecuzione** — il modello **no-exec**: il worker non può avviare alcun binario
 esterno. Da qui puoi concedere un'eccezione mirata **scegliendola dai denial
 raccolti nel soak** (sconsigliato, indebolisce il modello):
 
-```text
-┌─────────────────────────────┤ Ubuntu Hardening ├─────────────────────────────┐
-│ Esecuzione programmi per 'cef':                                              │
-│                                                                              │
-│ Nessun programma eseguibile: il worker non puo' avviare binari esterni       │
-│ (modello no-exec).                                                           │
-│                                                                              │
-│         Consenti l'esecuzione di un programma (dai denial del soak)          │
-│         Revoca un permesso di esecuzione concesso                            │
-│         Mostra/aggiorna i denial del soak                                    │
-│         << Indietro                                                          │
-│                                                                              │
-│                     <Ok>                         <Cancel>                    │
-└──────────────────────────────────────────────────────────────────────────────┘
-```
+![Esecuzione — modello no-exec](docs/img/31-esecuzione-submenu.png)
 
 Le altre voci del menu di gestione: **HTTPS/TLS** (self-signed o Let's Encrypt),
 **Cookie sicuri**, **AppArmor Enforce** (soak→enforce con rollback automatico),
@@ -411,24 +310,7 @@ Tre voci di **Gestisci siti** provano che il contenimento funziona.
 **Verifica isolamento del sito** — deploya una sonda nel docroot, la richiama via
 nginx e verifica che ogni tentativo di evasione sia negato:
 
-```text
-==> bash scripts/probe-vhost.sh cef
--------------------------------------------------------------
-[!] no second site — testing host isolation only (cross-site keys still assert via open_basedir).
-== isolation: 'cef' -> host ==
-  PASS xsite_read_config
-  PASS xsite_list_dir
-  PASS xsite_read_secret
-  PASS xsite_write
-  PASS read_etc_shadow
-  PASS exec_denied
-  PASS shell_spawn_denied
-  PASS egress_80_denied
-  PASS own_write_ok
-
-[*] ISOLATION OK — PASS=9 FAIL=0
--------------------------------------------------------------
-```
+![Verifica isolamento — 9/9 PASS](docs/img/24-isolamento.png)
 
 Le asserzioni: lettura/scrittura verso un altro sito, lettura di `/etc/shadow`,
 exec di binari, apertura di una shell, connessione in uscita su :80 — **tutte
@@ -437,17 +319,7 @@ Con un secondo sito configurato, la prova diventa **incrociata nei due sensi**.
 
 **Scansione malware del docroot (YARA-X)** — cerca pattern da webshell con `yr`:
 
-```text
-==> bash scripts/scan-malware.sh cef
--------------------------------------------------------------
-[*] YARA-X malware scan — site 'cef', rules: webshells.yar
-    scanning /var/www/html/cef/public_html
-
-[x] MATCHES: 1 — REVIEW each (rule  file). A CMS can trip some rules; confirm before acting.
-    php_cmd_from_http_input /var/www/html/cef/public_html/hardening-check.php
-    full report: /var/log/hardening-audit/malware-cef.txt
--------------------------------------------------------------
-```
+![Scansione malware YARA-X](docs/img/25-malware.png)
 
 > Nell'esempio la scansione segnala `hardening-check.php`: è la **pagina di
 > test** che deployiamo di proposito, contiene `system()` alimentato da input
@@ -459,28 +331,7 @@ Con un secondo sito configurato, la prova diventa **incrociata nei due sensi**.
 **Mostra tutta la policy del sito** — riepilogo unico di open_basedir, cartelle
 reach (rw/ro) ed egress v4/v6:
 
-```text
-==> bash scripts/tune-vhost.sh cef show
--------------------------------------------------------------
-== cef (PHP 8.1, uid 997) ==
--- open_basedir --
-php_admin_value[open_basedir] = /var/www/html/cef/public_html/:…/images/:…/media/:
-  …/cache/:…/administrator/cache/:…/tmp/:…/sessions/:…/logs/
--- reach (rw) --
-/var/www/html/cef/public_html/images
-/var/www/html/cef/public_html/media
-/var/www/html/cef/public_html/cache
-/var/www/html/cef/public_html/administrator/cache
-/var/www/html/cef/tmp
-/var/www/html/cef/sessions
-/var/www/html/cef/logs
--- reach (ro) --
-/var/www/html/cef/public_html
--- egress v4 --
--p tcp -d 127.0.0.1 --dport 3306
-[*] done.
--------------------------------------------------------------
-```
+![Mostra policy del sito](docs/img/26-policy.png)
 
 ### 5.7 Modalità testo (senza whiptail)
 
@@ -986,6 +837,98 @@ Su una VM Ubuntu 22.04 reale (PHP 8.1, MariaDB 10.6) è stato verificato in
 - auditd: regola *tree* `webroot_write` cattura le scritture in profondità.
 - Isolamento verificato dal menu: **9/9 asserzioni PASS** (host) / **32/32** nel
   test end-to-end con due siti.
+
+---
+
+## 13. Riferimento amministratore — dove vivono i dati
+
+Per chi deve **verificare o cambiare** le impostazioni a mano: da dove vengono i
+valori mostrati nei menu, e se una modifica è **già attiva** o richiede un
+reload/restart.
+
+### 13.1 La sorgente di verità: `/etc/hardening/sites/<sito>/`
+
+Lo stato per-sito **non** vive nei file di configurazione dei servizi: vive in una
+piccola cartella di stato, da cui la *sync-engine* (`lib/policy.sh`) **rigenera**
+i file di nginx/php-fpm/AppArmor/systemd/ufw. È la sorgente di verità.
+
+| File | Contenuto | Formato |
+|---|---|---|
+| `meta` | SITE, SERVER_NAME, RUNTIME_USER, UID, PHP_VERSION, DOCROOT, WEB_USER, SOCKET | `KEY=VALUE` |
+| `answers.env` | tutte le risposte della creazione (`%q`-quoted) — usato da *Aggiorna config* | `VAR=valore` |
+| `reach-rw.paths` | cartelle scrivibili dall'utente runtime | un path assoluto per riga |
+| `reach-ro.paths` | cartelle in sola lettura (di norma il docroot = codice) | un path per riga |
+| `noext.rules` | divieti di scrittura per estensione | `<dir>⇥<ext,ext,…>` per riga |
+| `egress-v4.allow` / `-v6.allow` | destinazioni egress consentite | frammenti iptables (`-p tcp -d IP --dport N`) |
+| `denials.tsv` | negazioni AppArmor raccolte nel soak | TSV (da `show-aa-denials.sh`) |
+| `permits.rules` | permessi exec concessi a mano | regole AppArmor |
+
+Modificare **questi** file e poi rilanciare `tune-vhost` (o *Aggiorna config*)
+equivale a usare il menu. Modificare invece i **file generati** (sotto) viene
+sovrascritto alla prima sincronizzazione.
+
+### 13.2 Un fatto di policy → più file generati
+
+Un singolo fatto ("l'utente può scrivere in X", "può raggiungere host:porta") è
+applicato in **più file contemporaneamente**, tenuti allineati da `tune-vhost`:
+
+| Fatto | File generati (dal solo stato) | Regione / chiave |
+|---|---|---|
+| scrivibile in X | pool `open_basedir` · hat AppArmor · systemd `ReadWritePaths` · nginx deny PHP | open_basedir · `hardening:reach` · `<sito>-reach.conf` · `hardening:nophp` |
+| no `.php` in X | hat AppArmor | regione `hardening:noext` |
+| exec concesso | hat AppArmor | regione `hardening:permits` |
+| reach host:porta | ufw before-rules v4/v6 | catena `<sito>_EGRESS` (regione `hardening:egress`) |
+| valore pool (memoria…) | pool `.conf` | `php_admin_value[...]` |
+| cap cgroup | drop-in systemd | `<sito>-limits.conf` |
+
+Percorsi reali (sito `<s>`, PHP `<v>`):
+
+```text
+pool     /etc/php/<v>/fpm/pool.d/<s>.conf
+hat AA   /etc/apparmor.d/php-fpm.d/<s>          (caricato via il master 'php-fpm')
+systemd  /etc/systemd/system/php<v>-fpm.service.d/<s>-reach.conf  (+ <s>-limits.conf)
+nginx    /etc/nginx/sites-available/<s>  +  /etc/nginx/snippets/<s>-app.conf
+egress   /etc/ufw/before.rules  +  /etc/ufw/before6.rules
+auditd   /etc/audit/rules.d/site-<s>.rules
+```
+
+### 13.3 Live, reload o restart? (la matrice che conta)
+
+Ogni layer applica le modifiche in modo diverso — punto critico per non credere di
+aver cambiato qualcosa che invece è ancora al valore vecchio:
+
+| Layer | Letto quando | Come si applica una modifica |
+|---|---|---|
+| **nginx** | al reload (SIGHUP) | `nginx -t && systemctl reload nginx` — **non** è live |
+| **php-fpm pool** (`php_admin_*`, open_basedir, disable_functions) | al reload | `systemctl reload php<v>-fpm` |
+| **AppArmor** (hat reach/noext/permits, flag enforce) | alla sostituzione del profilo | `apparmor_parser -r` — **applicato LIVE** ai processi già in esecuzione |
+| **systemd sandbox** (`ReadWritePaths`, `ProtectSystem`) | all'**avvio** dell'unità | serve **`systemctl restart php<v>-fpm`** — reload/`daemon-reload` NON bastano |
+| **ufw / iptables** (egress) | al reload di ufw | `ufw reload` |
+| **auditd** | al caricamento regole | `augenrules --load` |
+
+Conseguenze pratiche: `grant-write` **riavvia** php-fpm solo quando cambia
+`ReadWritePaths` (altrimenti un reload basta e non disturba gli altri pool); un
+`noext` o l'enforce sull'hat sono invece **live** via AppArmor (nessun restart);
+ri-eseguire `harden-vhost` / *Aggiorna config* **riporta l'hat a complain**, quindi
+poi va ri-enforzato.
+
+### 13.4 Cosa posso editare a mano, cosa no
+
+- **A mano SÌ** (poi `nginx -t && reload` o `systemctl reload php-fpm`): i valori
+  "statici" non gestiti dalla sync — direttive extra nel server block nginx, ini
+  PHP non coperti… Meglio ancora: metti i tunable in `sites/<s>.env` e usa
+  *Aggiorna config* (idempotente).
+- **A mano NO** (rigenerati dalla sync → le modifiche si perdono): `open_basedir`,
+  le regioni `hardening:reach`/`noext`/`permits` dell'hat, `ReadWritePaths`, la
+  regione `hardening:nophp` di nginx, le catene `<s>_EGRESS`. Per questi usa
+  sempre `tune-vhost` (dal menu o da CLI).
+
+### 13.5 Dove finiscono log e report
+
+- Report di audit/scan: `/var/log/hardening-audit/` (Lynis, Trivy, CIS,
+  `malware-<s>.txt`).
+- Log applicativi, nginx e php-fpm per-sito e i record AVC di AppArmor: vedi la
+  tabella in **§10**.
 
 ---
 
