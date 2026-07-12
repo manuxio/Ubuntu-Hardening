@@ -1,0 +1,75 @@
+# docker-compose.yml — local test stack for the "@@SITE@@" site.
+# Same runtime containment as the host: non-root, read-only rootfs, all caps
+# dropped, no-new-privileges, seccomp (default) + optional AppArmor, minimal
+# shell-less images. The site tree is bind-mounted (persistent) at the SAME path
+# as the host so the file structure is identical.
+#
+#   docker compose up -d --build
+#   sudo ./docker-egress.sh apply      # lock outbound to DNS/DB/mail/443 (optional)
+#   curl -H 'Host: @@SERVER_NAME@@' http://localhost:@@HOST_PORT@@/
+name: @@SITE@@
+
+services:
+  init:
+    image: busybox:1.36
+    user: "0:0"
+    command: ["/bin/sh", "/init-perms.sh"]
+    volumes:
+      - site-data:@@SITE_ROOT@@
+      - ./init-perms.sh:/init-perms.sh:ro
+    restart: "no"
+
+  php:
+    build: { context: ., dockerfile: Dockerfile.php }
+    image: @@IMAGE_PHP@@
+    user: "@@RUNTIME_UID@@:@@WEB_GID@@"
+    depends_on:
+      init: { condition: service_completed_successfully }
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      # AppArmor: load hardening-@@SITE@@.aa on the host first, else comment this out
+      - apparmor=hardening-@@SITE@@
+    tmpfs:
+      - /tmp:rw,mode=1777
+    volumes:
+      - site-data:@@SITE_ROOT@@
+    # nginx shares THIS container's network namespace (like a k8s pod), so it
+    # reaches php on 127.0.0.1:9000 and the web port is published here.
+    ports:
+      - "@@HOST_PORT@@:8080"
+    networks: [ appnet ]
+    restart: unless-stopped
+
+  nginx:
+    build: { context: ., dockerfile: Dockerfile.nginx }
+    image: @@IMAGE_NGINX@@
+    user: "101:@@WEB_GID@@"
+    depends_on: [ php ]
+    network_mode: "service:php"          # same netns as php -> fastcgi to 127.0.0.1:9000
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - apparmor=hardening-@@SITE@@
+    tmpfs:
+      - /tmp:rw,mode=1777
+    volumes:
+      - site-data:@@SITE_ROOT@@:ro       # nginx only READS the code
+    restart: unless-stopped
+@@REDIS_COMPOSE_BLOCK@@
+networks:
+  appnet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: @@COMPOSE_SUBNET@@
+
+volumes:
+  site-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: @@HOST_DATA_PATH@@

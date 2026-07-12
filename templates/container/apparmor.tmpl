@@ -1,0 +1,63 @@
+# AppArmor profile for the "@@SITE@@" containers (php-fpm + nginx).
+# It is the container analogue of the per-site hat: default-deny on exec (only the
+# app binaries may run), code stays non-writable, container-escape primitives are
+# blocked. Egress is further constrained by the NetworkPolicy (k8s) / DOCKER-USER
+# rules (compose) — here we only allow the socket *types*.
+#
+# Load on EACH node:
+#   sudo apparmor_parser -r -W /path/to/hardening-@@SITE@@.aa
+# Reference it:
+#   compose  security_opt: ["apparmor=hardening-@@SITE@@"]
+#   k8s      securityContext.appArmorProfile: {type: Localhost, localhostProfile: hardening-@@SITE@@}
+
+#include <tunables/global>
+
+profile hardening-@@SITE@@ flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+  #include <abstractions/openssl>
+  #include <abstractions/ssl_certs>
+
+  # socket types the app legitimately needs (egress destinations are filtered by
+  # the NetworkPolicy / DOCKER-USER firewall, not here)
+  network inet  stream,
+  network inet6 stream,
+  network inet  dgram,     # DNS
+  network inet6 dgram,
+  network unix  stream,
+
+  # block container-escape / privilege primitives
+  deny mount,
+  deny umount,
+  deny pivot_root,
+  deny ptrace (trace, tracedby, read, readby),
+  deny /sys/** wklx,
+  deny /proc/sys/** w,
+  deny /proc/sysrq-trigger rwklx,
+  deny /proc/kcore rwklx,
+
+  # read the runtime, its config and the mounted code tree
+  /        r,
+  /**      r,
+
+  # WRITABLE areas: the pool socket, scratch tmpfs, and the site's writable dirs.
+  # The code (docroot minus these dirs) has only 'r' above -> writes are denied by
+  # default, so a webshell cannot be written into the code.
+  /run/php/    rw,
+  /run/php/**  rwk,
+  /tmp/        rw,
+  /tmp/**      rwk,
+@@AA_RW_BLOCK@@
+  # ONLY the app binaries may execute (ix = run under this same profile). Any other
+  # exec — a shell, a dropped ELF — has no rule and is denied by default. The
+  # audit-deny lines below just make the common attempts show up in the log.
+  /usr/local/sbin/php-fpm  ix,
+  /usr/local/bin/php       ix,
+  /usr/sbin/nginx          ix,
+  audit deny /bin/**   x,
+  audit deny /usr/bin/** x,
+  audit deny /usr/bin/wget x,
+  audit deny /usr/bin/curl x,
+  audit deny /usr/bin/python* x,
+  audit deny /usr/bin/perl x,
+}

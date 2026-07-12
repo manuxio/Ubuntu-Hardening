@@ -1,0 +1,68 @@
+# /etc/nginx/nginx.conf   (rendered by export-site.sh)
+# Self-contained nginx for the "@@SITE@@" container: runs rootless (uid 33), all
+# temp/pid paths under /tmp so the container root filesystem can be read-only.
+worker_processes auto;
+pid /tmp/nginx.pid;
+error_log /dev/stderr warn;
+
+events { worker_connections 1024; }
+
+http {
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
+    access_log /dev/stdout;
+
+    # writable scratch on tmpfs (readOnlyRootFilesystem-friendly)
+    client_body_temp_path /tmp/nginx-client;
+    proxy_temp_path       /tmp/nginx-proxy;
+    fastcgi_temp_path     /tmp/nginx-fastcgi;
+    uwsgi_temp_path       /tmp/nginx-uwsgi;
+    scgi_temp_path        /tmp/nginx-scgi;
+
+    sendfile on;
+    tcp_nopush on;
+    server_tokens off;
+    client_max_body_size @@CLIENT_MAX_BODY@@;
+
+    server {
+        listen 8080;
+        listen [::]:8080;
+        server_name @@SERVER_NAME@@;
+        root @@DOCROOT@@;
+        index index.php index.html;
+
+        # security headers + never expose the FPM version
+        add_header X-Content-Type-Options nosniff always;
+        add_header X-Frame-Options SAMEORIGIN always;
+        fastcgi_hide_header X-Powered-By;
+
+        # never serve hidden files, VCS metadata, the config/secrets
+        location ~ /\.                        { deny all; }
+        location ~* configuration\.php(/|$)   { deny all; }
+        location ~* \.(?:ini|log|sh|bak|sql|twig)$ { deny all; }
+
+        # NO PHP execution in writable/upload dirs (the webshell vector). Kept in
+        # sync with the site's writable-dir set (reach-rw under the docroot).
+        location ~* ^/(@@WRITABLE_REGEX@@)/.*\.(php|phtml|php[0-9]|phar)(/|$) { deny all; }
+
+        location / { try_files $uri $uri/ /index.php?$args; }
+
+        # PHP handler: ONLY a real, existing .php reaches FPM (non-greedy split +
+        # try_files on the SCRIPT). Pairs with cgi.fix_pathinfo=0 + limit_extensions.
+        location ~ [^/]\.php(/|$) {
+            fastcgi_split_path_info ^(.+?\.php)(/.*)$;
+            set $saved_path_info $fastcgi_path_info;
+            try_files $fastcgi_script_name =404;
+            fastcgi_pass @@FASTCGI_PASS@@;
+            fastcgi_index index.php;
+            include fastcgi_params;
+            fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+            fastcgi_param PATH_INFO $saved_path_info;
+            fastcgi_param HTTPS $https if_not_empty;
+            fastcgi_read_timeout 120s;
+        }
+
+        # health endpoint for k8s probes / compose healthcheck (no PHP)
+        location = /healthz { access_log off; add_header Content-Type text/plain; return 200 "ok\n"; }
+    }
+}

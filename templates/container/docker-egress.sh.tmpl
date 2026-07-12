@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# docker-egress.sh apply|clear — restrict the OUTBOUND traffic of the "@@SITE@@"
+# compose network to the same allow-list as the hardened host: DNS, the database,
+# the mail relay and 443. Everything else is REJECTed. This is the compose
+# analogue of the per-uid egress firewall (on k8s the same is a NetworkPolicy).
+#
+# It installs a dedicated chain jumped from DOCKER-USER, matched on the compose
+# subnet, so it never disturbs other containers. Run as root AFTER `compose up`.
+set -euo pipefail
+
+SUBNET="@@COMPOSE_SUBNET@@"
+CH="@@SITE_CHAIN@@_EGRESS"
+[ "$(id -u)" = 0 ] || { echo "run as root (iptables)"; exit 1; }
+
+apply() {
+  iptables -N "$CH" 2>/dev/null || iptables -F "$CH"
+  iptables -A "$CH" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+  iptables -A "$CH" -d "$SUBNET" -j RETURN            # intra-stack (nginx<->php, redis)
+  iptables -A "$CH" -p udp --dport 53 -j RETURN       # DNS
+  iptables -A "$CH" -p tcp --dport 53 -j RETURN
+@@EGRESS_DOCKER_RULES@@
+  iptables -A "$CH" -m limit --limit 6/min -j LOG --log-prefix "@@SITE_CHAIN@@-DROP "
+  iptables -A "$CH" -j REJECT --reject-with icmp-port-unreachable
+  iptables -C DOCKER-USER -s "$SUBNET" -j "$CH" 2>/dev/null || \
+    iptables -I DOCKER-USER -s "$SUBNET" -j "$CH"
+  echo "egress applied: only DNS/DB/mail/443 allowed out of $SUBNET"
+}
+
+clear_rules() {
+  iptables -D DOCKER-USER -s "$SUBNET" -j "$CH" 2>/dev/null || true
+  iptables -F "$CH" 2>/dev/null || true
+  iptables -X "$CH" 2>/dev/null || true
+  echo "egress rules removed"
+}
+
+case "${1:-apply}" in
+  apply) apply ;;
+  clear) clear_rules ;;
+  *) echo "usage: $0 apply|clear"; exit 1 ;;
+esac

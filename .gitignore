@@ -20,3 +20,4 @@ transcript-hardening-session.md
 Thumbs.db
 *.swp
 *~
+export/

@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: @@SITE@@
+  namespace: @@NAMESPACE@@
+  labels: { app: @@SITE@@ }
+spec:
+  replicas: @@REPLICAS@@
+  selector:
+    matchLabels: { app: @@SITE@@ }
+  template:
+    metadata:
+      labels: { app: @@SITE@@ }
+    spec:
+      securityContext:
+        seccompProfile: { type: RuntimeDefault }
+      # one-shot: lay down the web_user permission model on a fresh PVC (root, then
+      # the app containers run rootless). Idempotent on an already-correct volume.
+      initContainers:
+        - name: init-perms
+          image: busybox:1.36
+          command: ["/bin/sh", "/init/init-perms.sh"]
+          securityContext:
+            runAsUser: 0
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL], add: [CHOWN, FOWNER, DAC_OVERRIDE, FSETID] }
+          volumeMounts:
+            - { name: site-data, mountPath: @@SITE_ROOT@@ }
+            - { name: init-script, mountPath: /init }
+      containers:
+        # --- PHP-FPM: the site runtime identity @@RUNTIME_UID@@:@@WEB_GID@@ ---------
+        - name: php
+          image: @@IMAGE_PHP@@
+          securityContext:
+            runAsUser: @@RUNTIME_UID@@
+            runAsGroup: @@WEB_GID@@
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            appArmorProfile: { type: Localhost, localhostProfile: hardening-@@SITE@@ }
+          ports:
+            - { containerPort: 9000, name: fpm }
+          resources:
+            requests: { cpu: "@@CPU_REQUEST@@", memory: "@@MEM_REQUEST@@" }
+            limits:   { cpu: "@@CPU_LIMIT@@",   memory: "@@MEM_LIMIT@@" }
+          volumeMounts:
+            - { name: site-data, mountPath: @@SITE_ROOT@@ }
+            - { name: tmp-php,   mountPath: /tmp }
+        # --- nginx: reads code (RO), proxies to php on the pod's localhost --------
+        - name: nginx
+          image: @@IMAGE_NGINX@@
+          securityContext:
+            runAsUser: 101
+            runAsGroup: @@WEB_GID@@
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            appArmorProfile: { type: Localhost, localhostProfile: hardening-@@SITE@@ }
+          ports:
+            - { containerPort: 8080, name: http }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            periodSeconds: 15
+          resources:
+            requests: { cpu: "50m",  memory: "32Mi" }
+            limits:   { cpu: "500m", memory: "128Mi" }
+          volumeMounts:
+            - { name: site-data, mountPath: @@SITE_ROOT@@, readOnly: true }
+            - { name: tmp-nginx, mountPath: /tmp }
+      volumes:
+        - name: site-data
+          persistentVolumeClaim: { claimName: @@SITE@@-data }
+        - name: tmp-php
+          emptyDir: { medium: Memory }
+        - name: tmp-nginx
+          emptyDir: { medium: Memory }
+        - name: init-script
+          configMap: { name: @@SITE@@-init, defaultMode: 0755 }

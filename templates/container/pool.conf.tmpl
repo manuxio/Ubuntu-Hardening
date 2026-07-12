@@ -1,0 +1,57 @@
+; /usr/local/etc/php-fpm.d/zz-@@SITE@@.conf   (rendered by export-site.sh)
+; Container variant of the site's PHP-FPM pool. Same php_admin_* hardening as the
+; host, but tuned for a rootless container:
+;   * the container runs AS the runtime uid (securityContext/USER), so php-fpm
+;     does NOT setuid -> we do NOT set user/group here (a non-root master cannot
+;     switch user). Workers inherit the container identity  <UID>:33 (www-data).
+;   * fastcgi over TCP :9000 — no shared socket volume. The port is never
+;     published to the host: nginx reaches it on the pod's localhost (k8s) or the
+;     internal compose network, and the k8s NetworkPolicy denies :9000 ingress
+;     from anywhere except the same pod.
+[global]
+; log to stderr so the container runtime / kubectl logs captures it
+error_log = /proc/self/fd/2
+daemonize = no
+
+[@@SITE@@]
+; NB: no user/group — the container already runs as @@RUNTIME_UID@@:@@WEB_GID@@
+listen = 9000
+@@FPM_ALLOWED_CLIENTS@@
+
+pm = dynamic
+pm.max_children         = @@PM_MAX_CHILDREN@@
+pm.start_servers        = 2
+pm.min_spare_servers    = 1
+pm.max_spare_servers    = 3
+pm.max_requests         = @@PM_MAX_REQUESTS@@
+
+; surface worker output to the container log; wipe the environment for scripts
+catch_workers_output      = yes
+decorate_workers_output   = no
+clear_env                 = yes
+security.limit_extensions = .php     ; FPM runs ONLY *.php -> uploaded evil.jpg can't execute
+
+; --- non-overridable hardening (php_admin_* wins over ini_set / .user.ini) ------
+php_admin_value[open_basedir]      = @@OPEN_BASEDIR@@
+php_admin_value[upload_tmp_dir]    = @@TMP_PATH@@
+php_admin_value[session.save_path] = @@SESSION_PATH@@
+php_admin_value[error_log]         = @@LOG_PATH@@/php-error.log
+php_admin_value[memory_limit]      = @@MEMORY_LIMIT@@
+php_admin_value[upload_max_filesize] = @@UPLOAD_MAX_FILESIZE@@
+php_admin_value[post_max_size]     = @@POST_MAX_SIZE@@
+php_admin_value[max_execution_time] = @@MAX_EXECUTION_TIME@@
+php_admin_value[disable_functions] = @@DISABLE_FUNCTIONS@@
+php_admin_flag[allow_url_include]  = off
+php_admin_flag[allow_url_fopen]    = off
+php_admin_flag[expose_php]         = off
+php_admin_flag[display_errors]     = off
+php_admin_flag[log_errors]         = on
+php_admin_value[cgi.fix_pathinfo]  = 0
+
+; session hardening
+php_admin_flag[session.cookie_httponly]  = on
+php_admin_flag[session.use_strict_mode]  = on
+php_admin_flag[session.use_only_cookies] = on
+php_admin_value[session.cookie_samesite] = Lax
+php_admin_flag[session.cookie_secure]    = @@COOKIE_SECURE@@
+@@REDIS_SESSION_BLOCK@@

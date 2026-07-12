@@ -1,0 +1,24 @@
+# The container analogue of the host's per-uid egress firewall. Once a NetworkPolicy
+# selects the pod, everything not explicitly allowed is DENIED — so :9000 (php) is
+# reachable only inside the pod, and outbound is limited to DNS + DB + mail + 443.
+# Requires a CNI that enforces NetworkPolicy (Calico, Cilium, …).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: @@SITE@@
+  namespace: @@NAMESPACE@@
+  labels: { app: @@SITE@@ }
+spec:
+  podSelector:
+    matchLabels: { app: @@SITE@@ }
+  policyTypes: [ Ingress, Egress ]
+  ingress:
+    # web traffic to nginx only (tighten `from:` to your ingress-controller ns).
+    - ports:
+        - { port: 8080, protocol: TCP }
+  egress:
+    # DNS
+    - ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+@@NETPOL_EGRESS_RULES@@

@@ -1,0 +1,12 @@
+# kubectl apply -k .
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: @@NAMESPACE@@
+resources:
+  - namespace.yaml
+  - configmap-init.yaml
+  - pvc.yaml
+  - deployment.yaml
+  - service.yaml
+  - networkpolicy.yaml
+@@KUSTOMIZE_EXTRA@@
