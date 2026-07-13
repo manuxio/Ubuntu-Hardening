@@ -9,6 +9,12 @@ include /etc/nginx/snippets/security-headers.conf;
 fastcgi_hide_header X-Powered-By;
 client_max_body_size @@CLIENT_MAX_BODY@@;
 
+# Optional HTTP Basic auth (server context — protects the whole site). Managed by
+# lib/policy.sh (basicauth_rebuild) from tune-vhost.sh auth-on/auth-user. The TLS
+# ACME location sets `auth_basic off` so cert renewals are never blocked.
+# >>> hardening:basicauth >>>
+# <<< hardening:basicauth <<<
+
 # Never serve hidden files, VCS metadata, or the config/secrets. The (/|$)
 # suffix also covers PATH_INFO variants (e.g. /configuration.php/x).
 location ~ /\.                        { deny all; }

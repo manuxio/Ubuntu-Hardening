@@ -36,6 +36,9 @@ http {
         add_header X-Frame-Options SAMEORIGIN always;
         fastcgi_hide_header X-Powered-By;
 
+        # optional HTTP Basic auth (whole site) — enabled at export time
+@@BASICAUTH_BLOCK@@
+
         # never serve hidden files, VCS metadata, the config/secrets
         location ~ /\.                        { deny all; }
         location ~* configuration\.php(/|$)   { deny all; }
@@ -62,7 +65,7 @@ http {
             fastcgi_read_timeout 120s;
         }
 
-        # health endpoint for k8s probes / compose healthcheck (no PHP)
-        location = /healthz { access_log off; add_header Content-Type text/plain; return 200 "ok\n"; }
+        # health endpoint for k8s probes / compose healthcheck (no PHP, no auth)
+        location = /healthz { auth_basic off; access_log off; add_header Content-Type text/plain; return 200 "ok\n"; }
     }
 }

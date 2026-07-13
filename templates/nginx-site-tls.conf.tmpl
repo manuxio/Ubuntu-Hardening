@@ -10,8 +10,9 @@ server {
     access_log /var/log/nginx/@@SITE@@.access.log;
     error_log  /var/log/nginx/@@SITE@@.error.log;
 
-    # Let's Encrypt http-01 challenge stays on plain HTTP.
-    location ^~ /.well-known/acme-challenge/ { root @@DOCROOT@@; default_type "text/plain"; allow all; }
+    # Let's Encrypt http-01 challenge stays on plain HTTP and is EXEMPT from basic
+    # auth, so cert issuance/renewal is never blocked when a site is protected.
+    location ^~ /.well-known/acme-challenge/ { root @@DOCROOT@@; default_type "text/plain"; allow all; auth_basic off; }
 
     # Either a redirect to HTTPS ("https" mode) or the app itself ("http+https").
     @@PORT80_LOCATION@@

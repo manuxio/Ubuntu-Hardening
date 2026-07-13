@@ -81,6 +81,7 @@ prompt NAMESPACE     "Kubernetes namespace"          "$SITE"
 prompt REPLICAS      "Kubernetes replicas"           "2"
 prompt WANT_HPA      "Add a HorizontalPodAutoscaler? (yes/no)" "no"
 prompt WANT_REDIS    "Add Redis (session/cache backend)? (yes/no)" "no"
+prompt WANT_BASICAUTH "Protect the container with HTTP Basic auth? (yes/no)" "no"
 prompt STORAGE_CLASS "k8s StorageClass for the code PVC" "standard"
 prompt PVC_SIZE      "k8s PVC size" "2Gi"
 
@@ -171,6 +172,19 @@ fi
 is_yes "$WANT_HPA" && KUSTOMIZE_EXTRA+="  - hpa.yaml"$'\n'
 [ -n "$KUSTOMIZE_EXTRA" ] || KUSTOMIZE_EXTRA="# (no optional resources)"
 
+# HTTP Basic auth (optional) — baked into the nginx image as /etc/nginx/.htpasswd.
+BA_HTPASSWD=""; BASICAUTH_BLOCK="  # basic auth: off"; BASICAUTH_COPY="# (no basic auth)"
+if is_yes "$WANT_BASICAUTH"; then
+  prompt BASICAUTH_USER "Basic auth username" "admin"
+  ba_pass="${BASICAUTH_PASS:-}"
+  if [ -z "$ba_pass" ] && [ -t 0 ]; then read -r -s -p "Basic auth password for '$BASICAUTH_USER': " ba_pass; echo; fi
+  [ -n "$ba_pass" ] || die "basic auth requested but no password (set BASICAUTH_PASS or run on a terminal)"
+  BA_HTPASSWD="$(printf '%s:%s' "$BASICAUTH_USER" "$(printf '%s' "$ba_pass" | openssl passwd -apr1 -stdin)")"
+  BASICAUTH_BLOCK="  auth_basic \"Area riservata\";"$'\n'"  auth_basic_user_file /etc/nginx/.htpasswd;"
+  BASICAUTH_COPY="COPY .htpasswd /etc/nginx/.htpasswd"
+  log "container basic auth: ON (user '$BASICAUTH_USER')"
+fi
+
 # --- render ------------------------------------------------------------------
 VARS=(SITE PHP_VERSION RUNTIME_USER RUNTIME_UID WEB_GID SITE_ROOT DOCROOT SERVER_NAME
       OPEN_BASEDIR DISABLE_FUNCTIONS MEMORY_LIMIT UPLOAD_MAX_FILESIZE POST_MAX_SIZE
@@ -180,7 +194,8 @@ VARS=(SITE PHP_VERSION RUNTIME_USER RUNTIME_UID WEB_GID SITE_ROOT DOCROOT SERVER
       COMPOSE_SUBNET SITE_CHAIN NAMESPACE REPLICAS HPA_MAX PVC_SIZE STORAGE_CLASS
       PVC_ACCESS_MODE CPU_REQUEST CPU_LIMIT MEM_REQUEST MEM_LIMIT
       AA_RW_BLOCK EGRESS_DOCKER_RULES NETPOL_EGRESS_RULES REDIS_COMPOSE_BLOCK
-      REDIS_SESSION_BLOCK REDIS_EXT_BLOCK PECL_DEPS KUSTOMIZE_EXTRA INIT_PERMS_INDENTED)
+      REDIS_SESSION_BLOCK REDIS_EXT_BLOCK PECL_DEPS BASICAUTH_BLOCK BASICAUTH_COPY
+      KUSTOMIZE_EXTRA INIT_PERMS_INDENTED)
 
 OUT="${OUTDIR:-$REPO/export/$SITE}"
 rm -rf "$OUT"; mkdir -p "$OUT"
@@ -193,6 +208,7 @@ render_build() { # dest dir
   render_template "$TPL/pool.conf.tmpl"        "$d/pool.conf"        "${VARS[@]}"
   render_template "$TPL/nginx.conf.tmpl"       "$d/nginx.conf"       "${VARS[@]}"
   render_template "$TPL/apparmor.tmpl"         "$d/hardening-${SITE}.aa" "${VARS[@]}"
+  [ -n "$BA_HTPASSWD" ] && { printf '%s\n' "$BA_HTPASSWD" > "$d/.htpasswd"; chmod 644 "$d/.htpasswd"; }
 }
 
 if [ "$TARGET" = compose ] || [ "$TARGET" = both ]; then

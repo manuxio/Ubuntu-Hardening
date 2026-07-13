@@ -184,6 +184,50 @@ nginx_nophp_rebuild() {                          # SITE
   fi
 }
 
+# --- HTTP Basic auth (per-site, nginx) ---------------------------------------
+# Protect a whole site with HTTP Basic auth. The htpasswd lives in
+# /etc/nginx/auth/<site>.htpasswd (root:www-data 640); the `auth_basic` directives
+# are a managed region in the site's app snippet (server context -> covers HTTP and
+# HTTPS). Passwords are hashed with `openssl passwd -apr1` (no apache2-utils dep)
+# and are read on STDIN, never on the command line.
+BASICAUTH_DIR="${BASICAUTH_DIR:-/etc/nginx/auth}"
+basicauth_file() { printf '%s/%s.htpasswd' "$BASICAUTH_DIR" "$1"; }
+
+basicauth_set_user() {                           # SITE USER PASS
+  local site="$1" user="$2" pass="$3" f hash tmp
+  case "$user" in ''|*[:/[:space:]]*) die "invalid basic-auth username: '$user'" ;; esac
+  # the dir must be TRAVERSABLE by nginx (www-data), or auth verification 500s
+  # ("open() … Permission denied") even though the file itself is group-readable.
+  f="$(basicauth_file "$site")"; mkdir -p "$BASICAUTH_DIR"
+  chown root:www-data "$BASICAUTH_DIR" 2>/dev/null || true; chmod 750 "$BASICAUTH_DIR"
+  touch "$f"
+  hash="$(printf '%s' "$pass" | openssl passwd -apr1 -stdin)"
+  tmp="$(mktemp)"; grep -v "^${user}:" "$f" 2>/dev/null > "$tmp" || true
+  printf '%s:%s\n' "$user" "$hash" >> "$tmp"; mv "$tmp" "$f"
+  chown root:www-data "$f" 2>/dev/null || true; chmod 640 "$f"
+}
+basicauth_del_user() {                           # SITE USER
+  local f tmp; f="$(basicauth_file "$1")"; [ -f "$f" ] || return 0
+  tmp="$(mktemp)"; grep -v "^${2}:" "$f" > "$tmp" || true; mv "$tmp" "$f"; chmod 640 "$f"
+}
+basicauth_users() { local f; f="$(basicauth_file "$1")"; [ -s "$f" ] && cut -d: -f1 "$f" || true; }
+
+basicauth_rebuild() {                            # SITE — (re)write the region + reload nginx
+  local site="$1" snip f on block
+  snip="/etc/nginx/snippets/${site}-app.conf"; [ -f "$snip" ] || return 0
+  f="$(basicauth_file "$site")"; on="$(policy_meta_get "$site" BASIC_AUTH)"
+  if [ "$on" = on ] && [ -s "$f" ]; then
+    block="  auth_basic \"Area riservata\";"$'\n'"  auth_basic_user_file ${f};"
+  else
+    block="  # basic auth: off"
+  fi
+  # server-context directives -> insert before the snippet's 'root' line on legacy snippets
+  _ensure_region_before_anchor "$snip" "basicauth" '^root '
+  write_region "$snip" "basicauth" "$block"
+  if command -v nginx >/dev/null 2>&1 && nginx -t >/dev/null 2>&1; then reload_service nginx
+  else warn "nginx -t failed after basic-auth rebuild — inspect $snip"; fi
+}
+
 # --- extension write-denies (opt-in, granular per dir) -----------------------
 # Deny WRITING chosen file extensions in chosen dirs via the AppArmor hat, so a
 # webshell can't even LAND on disk there (deny beats the reach allow, and covers

@@ -17,6 +17,9 @@
 #   tune-vhost.sh <SITE> noext-add   <dir> <ext,ext,...>  # deny writing those
 #                                                 # extensions in <dir> (AppArmor)
 #   tune-vhost.sh <SITE> noext-del   <dir>
+#   tune-vhost.sh <SITE> auth-user   <name> [pass]   # HTTP Basic auth: add user + enable
+#   tune-vhost.sh <SITE> auth-deluser <name>
+#   tune-vhost.sh <SITE> auth-on | auth-off
 #   tune-vhost.sh <SITE> set   <key> <value>      # memory_limit, upload_max_filesize,
 #                                                 # allow_url_fopen, MemoryMax, CPUQuota,
 #                                                 # pm.max_children, pm.max_requests, ...
@@ -90,6 +93,37 @@ case "$ACTION" in
     dir="${1:?dir}"
     log "noext $SITE: remove extension write-deny for $dir"
     if [ $DRY -eq 0 ]; then noext_unset "$SITE" "$dir"; noext_rebuild "$SITE"; fi
+    ;;
+
+  auth-user)
+    user="${1:?username}"; pass="${2:-${BASICAUTH_PASS:-}}"
+    if [ -z "$pass" ]; then
+      [ -t 0 ] || die "no password (pass as 2nd arg, \$BASICAUTH_PASS, or run on a terminal)"
+      read -r -s -p "Password for '$user': " pass; echo
+      read -r -s -p "Confirm: " pass2; echo; [ "$pass" = "$pass2" ] || die "passwords differ"
+    fi
+    [ -n "$pass" ] || die "empty password"
+    log "basic auth $SITE: set user '$user' + ENABLE"
+    if [ $DRY -eq 0 ]; then
+      basicauth_set_user "$SITE" "$user" "$pass"
+      policy_meta_set "$SITE" BASIC_AUTH on
+      basicauth_rebuild "$SITE"
+    fi
+    ;;
+
+  auth-deluser)
+    user="${1:?username}"
+    log "basic auth $SITE: remove user '$user'"
+    if [ $DRY -eq 0 ]; then basicauth_del_user "$SITE" "$user"; basicauth_rebuild "$SITE"; fi
+    ;;
+
+  auth-on|auth-off)
+    val=on; [ "$ACTION" = auth-off ] && val=off
+    if [ "$val" = on ] && [ ! -s "$(basicauth_file "$SITE")" ]; then
+      die "no users yet — add one first: tune-vhost.sh $SITE auth-user <name>"
+    fi
+    log "basic auth $SITE: ${val^^}"
+    if [ $DRY -eq 0 ]; then policy_meta_set "$SITE" BASIC_AUTH "$val"; basicauth_rebuild "$SITE"; fi
     ;;
 
   set)
@@ -187,6 +221,10 @@ case "$ACTION" in
     if [ -s "$(policy_state_dir "$SITE")/noext.rules" ]; then
       sed 's/\t/  ->  /' "$(policy_state_dir "$SITE")/noext.rules"
     else echo "(none)"; fi
+    echo "-- basic auth --"
+    if [ "$(policy_meta_get "$SITE" BASIC_AUTH)" = on ]; then
+      echo "on — users: $(basicauth_users "$SITE" | tr '\n' ' ')"
+    else echo "off"; fi
     echo "-- egress v4 --";     cat "$(policy_state_dir "$SITE")/egress-v4.allow" 2>/dev/null || true
     echo "-- egress v6 --";     cat "$(policy_state_dir "$SITE")/egress-v6.allow" 2>/dev/null || true
     ;;
