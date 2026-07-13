@@ -62,6 +62,13 @@ ui_input() {  # ui_input "prompt" "default"  -> echoes value
   fi
   printf '%s [%s]: ' "$prompt" "$def" >&2; local v; read -r v || return 1; echo "${v:-$def}"
 }
+ui_password() {  # ui_password "prompt"  -> echoes secret (hidden entry)
+  local prompt="$1"
+  if [ "$UI" = whiptail ]; then
+    whiptail --title "$TITLE" --passwordbox "$prompt" 10 70 "" 3>&1 1>&2 2>&3; return $?
+  fi
+  local v; printf '%s: ' "$prompt" >&2; read -r -s v || return 1; echo >&2; echo "$v"
+}
 ui_msg() {  # ui_msg "text" — fd swap so the box shows on the terminal even when
             # the caller runs inside $(...) (e.g. pick_site), not into the capture
   if [ "$UI" = whiptail ]; then whiptail --title "$TITLE" --msgbox "$1" 12 70 3>&1 1>&2 2>&3; else echo "-- $1" >&2; fi
@@ -429,6 +436,37 @@ Ricordati di ELIMINARLA dopo l'uso." \
     esac
   done
 }
+mod_basicauth() {  # mod_basicauth <site> — HTTP Basic auth (protect the whole site)
+  local s="$1" op u p on users
+  while true; do
+    on="$(meta_get "$s" BASIC_AUTH)"; on="${on:-off}"
+    users="$(cut -d: -f1 "/etc/nginx/auth/${s}.htpasswd" 2>/dev/null | tr '\n' ' ')"
+    op="$(ui_menu "Basic auth di '$s'  (stato: ${on})
+Utenti: ${users:-(nessuno)}
+
+Protegge l'INTERO sito con username/password (nginx auth_basic).
+L'ACME di Let's Encrypt resta esente: i rinnovi non si bloccano." \
+      adduser "Aggiungi/aggiorna un utente (chiede la password)" \
+      enable  "ABILITA la protezione" \
+      disable "DISABILITA la protezione" \
+      deluser "Rimuovi un utente" \
+      back    "<< Indietro")" || return
+    case "$op" in
+      adduser) u="$(ui_input "Nome utente:" "admin")" || continue; [ -n "$u" ] || continue
+               p="$(ui_password "Password per '$u'")" || continue
+               [ -n "$p" ] || { ui_msg "Password vuota — annullato."; continue; }
+               # password via ENV (never on the command line / in the dry-run preview)
+               BASICAUTH_PASS="$p" runscript "$SCRIPTS/tune-vhost.sh" "$s" auth-user "$u" ;;
+      enable)  tune_apply "$s" auth-on ;;
+      disable) tune_apply "$s" auth-off ;;
+      deluser) [ -n "$users" ] || { ui_msg "Nessun utente da rimuovere."; continue; }
+               local -a items=(); for u in $users; do items+=("$u" "$u"); done
+               u="$(ui_menu "Rimuovi quale utente?" "${items[@]}")" || continue
+               [ -n "$u" ] && tune_apply "$s" auth-deluser "$u" ;;
+      back)    return ;;
+    esac
+  done
+}
 action_modify() {  # "Gestisci siti" — pick a site, then every per-site operation
   local s g
   s="$(pick_site)" || return; [ -n "$s" ] || return
@@ -441,12 +479,14 @@ action_modify() {  # "Gestisci siti" — pick a site, then every per-site operat
       exec    "Esecuzione: permessi AppArmor exec di programmi" \
       php     "PHP / Pool: memoria, limiti, workers, funzioni" \
       cookie  "Cookie sicuri (session.cookie_secure)" \
+      basicauth "Basic auth: proteggi il sito con username/password" \
       enforce "AppArmor: Enforce (soak -> enforce)" \
       denials "AppArmor: mostra i denial del soak" \
       probe   "Verifica isolamento del sito" \
       malware "Scansione malware del docroot (YARA-X)" \
       test    "Test PHP: deploy / elimina pagina di test" \
       refresh "Aggiorna config (applica gli ultimi template)" \
+      containerize "Containerizza: genera bundle compose + k8s (Dockerfile, ecc.)" \
       show    "Mostra tutta la policy del sito" \
       destroy "DISTRUGGI il sito (rimuove config, NON i dati)" \
       back    "<< Indietro")" || return
@@ -458,12 +498,14 @@ action_modify() {  # "Gestisci siti" — pick a site, then every per-site operat
       exec)    mod_exec "$s" ;;
       php)     mod_php "$s" ;;
       cookie)  mod_tls "$s" ;;
+      basicauth) mod_basicauth "$s" ;;
       enforce) runscript "$SCRIPTS/enforce-vhost.sh" "$s" ;;
       denials) runscript "$SCRIPTS/show-aa-denials.sh" "$s" ;;
       probe)   runscript "$SCRIPTS/probe-vhost.sh" "$s" ;;
       malware) runscript "$SCRIPTS/scan-malware.sh" "$s" ;;
       test)    mod_testpage "$s" ;;
       refresh) runscript "$SCRIPTS/refresh-vhost.sh" "$s" ;;
+      containerize) runscript "$SCRIPTS/export-site.sh" "$s" ;;
       show)    runscript "$SCRIPTS/tune-vhost.sh" "$s" show ;;
       destroy) runscript "$SCRIPTS/destroy-vhost.sh" "$s"
                [ -d "/etc/hardening/sites/$s" ] || return ;;   # destroyed -> leave
@@ -591,7 +633,7 @@ if [ "${1:-}" = "--check" ]; then
   echo "  repo root  : $REPO"
   miss=0
   for s in harden-os.sh harden-vhost.sh enforce-vhost.sh setup-tls.sh tune-vhost.sh \
-           refresh-vhost.sh destroy-vhost.sh deploy-test.sh probe-vhost.sh \
+           refresh-vhost.sh destroy-vhost.sh deploy-test.sh probe-vhost.sh export-site.sh \
            scan-malware.sh show-aa-denials.sh add-aa-permit.sh audit-os.sh \
            scan-cve.sh audit-cis.sh; do
     if [ -f "$SCRIPTS/$s" ]; then echo "  [ok]   scripts/$s"; else echo "  [MISS] scripts/$s"; miss=$((miss+1)); fi

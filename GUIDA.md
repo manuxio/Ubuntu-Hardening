@@ -219,7 +219,7 @@ passaggio a enforce.
 **Gestisci siti** chiede quale sito e apre il menu di gestione day-2. Ogni voce
 è un'operazione mirata sul sito esistente:
 
-![Menu Gestisci siti](docs/img/09-gestisci-menu.png)
+![Menu Gestisci siti](docs/img/40-gestisci-nuovo.png)
 
 **⚙️ Cosa fa ogni voce, tecnicamente** (comando lanciato, file toccati, come
 viene applicato). Le voci che *modificano* la policy passano tutte da
@@ -236,12 +236,14 @@ servizi giusti:
 | Esecuzione | `add-aa-permit.sh` | `permits.rules` → regione `hardening:permits` dell'hat | reload AppArmor |
 | PHP / Pool | `tune-vhost set`/`disable`/`enable` | `<sito>.conf` (`php_admin_*`) o drop-in cgroup | reload php-fpm (+ `daemon-reload` per i cgroup) |
 | Cookie sicuri | `tune-vhost tls-on`/`tls-off` | `<sito>.conf` (`session.cookie_secure`) | reload php-fpm |
+| Basic auth | `tune-vhost auth-user`/`auth-on`/`auth-off` | `/etc/nginx/auth/<sito>.htpasswd` + regione `hardening:basicauth` | reload nginx |
 | AppArmor Enforce | `enforce-vhost.sh` | flag del profilo hat (complain↔enforce) | reload AppArmor + **restart** php-fpm + health-check + auto-rollback |
 | AppArmor denial | `show-aa-denials.sh` | *legge* `/var/log/audit/audit.log` | nessuna scrittura |
 | Verifica isolamento | `probe-vhost.sh` | deploy/rimozione sonda temporanea | curl via nginx, poi rimuove |
 | Scansione malware | `scan-malware.sh` | report `/var/log/hardening-audit/malware-<sito>.txt` | `yr scan` read-only |
 | Test PHP | `deploy-test.sh` (`--remove`) | copia/rimuove `hardening-check.php` + probe nel docroot | — |
 | Aggiorna config | `refresh-vhost.sh` | ri-esegue `harden-vhost` da `answers.env` (ri-rende i template) | **riporta l'hat a complain** → poi ri-enforce |
+| Containerizza | `export-site.sh` | genera `export/<sito>/{compose,k8s}` (Dockerfile, manifest…) | nessuna modifica al sito |
 | Mostra policy | `tune-vhost show` | *legge* lo stato | nessuna scrittura |
 | DISTRUGGI | `destroy-vhost.sh` | rimuove pool/hat/nginx/egress/auditd/systemd/stato + utente | **mantiene** docroot, file caricati e DB |
 
@@ -290,11 +292,19 @@ raccolti nel soak** (sconsigliato, indebolisce il modello):
 
 ![Esecuzione — modello no-exec](docs/img/31-esecuzione-submenu.png)
 
+**Basic auth** — protegge l'**intero sito** con username/password (nginx
+`auth_basic`). Mostra lo stato attuale e gli utenti; aggiungi un utente (la
+password è chiesta **nascosta**, non passa mai dagli argomenti), abilita/disabilita,
+rimuovi utenti. L'ACME di Let's Encrypt resta esente, così i rinnovi non si bloccano.
+
+![Basic auth](docs/img/41-basicauth.png)
+
 Le altre voci del menu di gestione: **HTTPS/TLS** (self-signed o Let's Encrypt),
 **Cookie sicuri**, **AppArmor Enforce** (soak→enforce con rollback automatico),
 **AppArmor denial** (mostra le negazioni del soak), **Aggiorna config**
-(riapplica gli ultimi template), **Test PHP** (deploy/elimina la pagina di test), e **DISTRUGGI**
-(rimuove la configurazione ma **non** i dati sul disco).
+(riapplica gli ultimi template), **Test PHP** (deploy/elimina la pagina di test),
+**Containerizza** (genera il bundle compose + k8s — vedi [`dockerize.md`](dockerize.md)),
+e **DISTRUGGI** (rimuove la configurazione ma **non** i dati sul disco).
 
 > **Test PHP → Deploy** installa *due* file: la pagina diagnostica nel
 > docroot (deve essere servita, 200) **e** una piccola probe `.php` in una

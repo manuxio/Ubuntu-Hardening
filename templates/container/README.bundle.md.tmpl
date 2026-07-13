@@ -1,0 +1,76 @@
+# Container bundle — site "@@SITE@@"
+
+Generato da `export-site.sh`. Riproduce nel container gli **stessi controlli
+runtime** dell'host hardenizzato — non-root, root filesystem read-only, tutte le
+capability eliminate, `no-new-privileges`, seccomp (+ AppArmor opzionale), egress
+per-sito — con la **stessa versione PHP** (@@PHP_VERSION@@) e la **stessa struttura
+file** montata persistente. Gli scanner host (Lynis/Trivy/OpenSCAP/YARA) **non**
+fanno parte del container: sono strumenti di host/CI.
+
+## Logica delle utenze
+
+| Identità | uid:gid | Ruolo | Accesso al codice |
+|---|---|---|---|
+| `www-data` | 33:33 | proprietario del codice; **nginx** gira così | owner, ma il volume è montato **read-only** per nginx |
+| `@@RUNTIME_USER@@` (runtime) | @@RUNTIME_UID@@:33 | worker **php-fpm** | solo via gruppo 33: **legge** il codice (750), **scrive solo** le dir 2770 |
+
+- Il codice è `www-data:www-data`, dir `750` / file `640`: il runtime lo legge via
+  gruppo, **non può scriverlo** (né riscrivere `configuration.php`, `640`).
+- Le dir scrivibili sono `2770` setgid gruppo `www-data`: il runtime ci scrive, i
+  file nuovi ereditano il gruppo. Preparate una volta da `init-perms.sh` (init
+  container / init service, unico step con root), poi i container girano rootless.
+- nginx→php via **TCP `127.0.0.1:9000`**: in compose nginx condivide il network
+  namespace di php (`network_mode: service:php`), in k8s stanno nello stesso pod.
+  La porta 9000 non è mai pubblicata verso l'esterno.
+
+## Controlli di sicurezza (mappa host → container)
+
+| Host | Container |
+|---|---|
+| uid per-sito + gruppo www-data | `runAsUser/runAsGroup` (k8s) · `user:` (compose) |
+| codice non scrivibile dal runtime | modello permessi + volume RO in nginx + `readOnlyRootFilesystem` |
+| hat AppArmor no-exec | immagine **senza shell/tool** + profilo `hardening-@@SITE@@` + `disable_functions` |
+| sandbox systemd (ProtectSystem, NoNewPrivileges, PrivateTmp) | `readOnlyRootFilesystem`, `allowPrivilegeEscalation:false`, `cap_drop:[ALL]`, `seccomp:RuntimeDefault`, `/tmp` tmpfs |
+| egress firewall per-uid | **NetworkPolicy** (k8s) · **DOCKER-USER** `docker-egress.sh` (compose) |
+| open_basedir, disable_functions, limit_extensions | identici, nel pool `php_admin_*` incorporato nell'immagine |
+| limiti cgroup | `resources.limits` (k8s) · `deploy`/limiti compose |
+
+## Uso — compose (test locali)
+
+```bash
+cd compose
+docker compose up -d --build
+# opzionale ma consigliato: blocca l'uscita a DNS/DB/mail/443
+sudo ./docker-egress.sh apply
+# opzionale (più forte): carica il profilo AppArmor sull'host
+sudo apparmor_parser -r -W hardening-@@SITE@@.aa
+curl -H 'Host: @@SERVER_NAME@@' http://localhost:@@HOST_PORT@@/
+```
+
+Il volume del sito è **bind-mount persistente** su `@@HOST_DATA_PATH@@` (stessa
+struttura dell'host). Deponi il codice lì (o via FTP come sull'host).
+
+## Uso — Kubernetes
+
+```bash
+cd k8s
+# build & push delle immagini minimali (stesso contesto della compose)
+docker build -f Dockerfile.php   -t @@IMAGE_PHP@@   . && docker push @@IMAGE_PHP@@
+docker build -f Dockerfile.nginx -t @@IMAGE_NGINX@@ . && docker push @@IMAGE_NGINX@@
+# carica il profilo AppArmor su OGNI nodo (o rimuovi il riferimento appArmorProfile):
+#   sudo apparmor_parser -r -W hardening-@@SITE@@.aa
+kubectl apply -k .
+```
+
+- **Repliche**: `@@REPLICAS@@` (modifica `deployment.yaml` o l'HPA). Con repliche > 1
+  il PVC del codice deve essere **ReadWriteMany** (`@@PVC_ACCESS_MODE@@` qui).
+- **Egress**: la `NetworkPolicy` consente solo DNS + DB + mail + 443 (serve un CNI
+  che la applichi: Calico, Cilium…).
+- Esponi il `Service` con un Ingress/Gateway (la TLS termina lì; imposta
+  `session.cookie_secure=on` via `X-Forwarded-Proto`).
+
+## Personalizzazione
+
+Rigenera con altri parametri: `export-site.sh @@SITE@@ --both` (chiede repliche,
+namespace, Redis, PVC…). I file YAML sono normali manifest kustomize: puoi
+modificarli a mano o via `kustomization.yaml`.

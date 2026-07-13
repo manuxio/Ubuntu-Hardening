@@ -1,0 +1,27 @@
+# syntax=docker/dockerfile:1
+# Minimal, hardened nginx image for the "@@SITE@@" site. Runs rootless (uid 101,
+# group www-data 33) on port 8080, config baked in, no shell/fetch tools.
+FROM nginx:1.27-bookworm
+
+# our self-contained config (temp/pid under /tmp, listen 8080, fastcgi to the pool)
+COPY nginx.conf /etc/nginx/nginx.conf
+# optional HTTP Basic auth password file (only present when enabled at export time)
+@@BASICAUTH_COPY@@
+RUN rm -f /etc/nginx/conf.d/default.conf 2>/dev/null || true
+
+# nginx runs as uid 101 with PRIMARY group www-data(33): it reads the code via the
+# group (mode 750) and connects the pool socket (group 33), but never owns/writes
+# the code (and the code volume is mounted read-only for this container anyway).
+RUN set -eux; \
+    nginx -t; \
+    rm -f /bin/sh /bin/bash /usr/bin/dash \
+          /usr/bin/wget /usr/bin/curl \
+          /usr/bin/apt /usr/bin/apt-get /usr/bin/dpkg \
+          /docker-entrypoint.sh 2>/dev/null || true; \
+    rm -rf /docker-entrypoint.d
+
+USER 101:@@WEB_GID@@
+EXPOSE 8080
+STOPSIGNAL SIGQUIT
+# exec form — nginx is PID 1, no shell entrypoint / envsubst templating
+ENTRYPOINT ["nginx", "-g", "daemon off;"]

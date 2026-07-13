@@ -1,0 +1,64 @@
+# Optional Redis (session/cache backend) for "@@SITE@@". Only reachable by the
+# site pods (its own NetworkPolicy), rootless, read-only rootfs, ephemeral /data.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: @@SITE@@-redis
+  namespace: @@NAMESPACE@@
+  labels: { app: @@SITE@@-redis }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: @@SITE@@-redis }
+  template:
+    metadata:
+      labels: { app: @@SITE@@-redis }
+    spec:
+      securityContext:
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          args: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+          ports: [ { containerPort: 6379 } ]
+          securityContext:
+            runAsUser: 999
+            runAsGroup: 999
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          resources:
+            requests: { cpu: "50m", memory: "64Mi" }
+            limits:   { cpu: "500m", memory: "160Mi" }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: @@SITE@@-redis
+  namespace: @@NAMESPACE@@
+  labels: { app: @@SITE@@-redis }
+spec:
+  selector: { app: @@SITE@@-redis }
+  ports: [ { port: 6379, targetPort: 6379 } ]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: @@SITE@@-redis
+  namespace: @@NAMESPACE@@
+spec:
+  podSelector:
+    matchLabels: { app: @@SITE@@-redis }
+  policyTypes: [ Ingress, Egress ]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: @@SITE@@ } }
+      ports:
+        - { port: 6379, protocol: TCP }
+  egress: []   # redis needs no outbound

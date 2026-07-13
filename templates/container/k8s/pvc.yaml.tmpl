@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: @@SITE@@-data
+  namespace: @@NAMESPACE@@
+  labels: { app: @@SITE@@ }
+spec:
+  # NB: with replicas > 1 the code volume is shared, so it needs ReadWriteMany
+  # (a RWX StorageClass: NFS, CephFS, EFS…). With 1 replica ReadWriteOnce is fine.
+  accessModes:
+    - @@PVC_ACCESS_MODE@@
+  resources:
+    requests:
+      storage: @@PVC_SIZE@@
+  storageClassName: @@STORAGE_CLASS@@

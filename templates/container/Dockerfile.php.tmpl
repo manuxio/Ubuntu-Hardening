@@ -1,0 +1,61 @@
+# syntax=docker/dockerfile:1
+# Minimal, hardened PHP-FPM image for the "@@SITE@@" site.
+# Same PHP major.minor as the host, same extensions. The final image is stripped
+# of shells and network tools so there is nothing for a compromised worker to
+# exec (the container analogue of the AppArmor no-exec hat + disable_functions).
+FROM php:@@PHP_VERSION@@-fpm-bookworm
+
+# --- build: system deps + the SAME extensions the host installs -----------------
+# Uses the official docker-php idiom: install the -dev headers, build, then ldd the
+# freshly-built .so files to pin their RUNTIME libraries (libpng16, libzip4, …)
+# before auto-removing the -dev headers. Skipping this removes the runtime libs and
+# the extensions fail to load at start.
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        libpng16-16 libjpeg62-turbo libfreetype6 libzip4 libicu72 libonig5 libxml2 libcurl4; \
+    buildDeps="libpng-dev libjpeg62-turbo-dev libfreetype6-dev libzip-dev libicu-dev libonig-dev libxml2-dev libcurl4-openssl-dev @@PECL_DEPS@@"; \
+    apt-get install -y --no-install-recommends $buildDeps; \
+    docker-php-ext-configure gd --with-freetype --with-jpeg; \
+    docker-php-ext-install -j"$(nproc)" \
+        mysqli pdo_mysql gd zip intl bcmath mbstring xml curl opcache; \
+@@REDIS_EXT_BLOCK@@    docker-php-source delete; \
+    apt-get purge -y $buildDeps; apt-get autoremove -y; \
+    rm -rf /var/lib/apt/lists/*
+
+# opcache: production-safe defaults (no timestamp revalidation)
+RUN { \
+      echo 'opcache.enable=1'; \
+      echo 'opcache.validate_timestamps=0'; \
+      echo 'opcache.max_accelerated_files=20000'; \
+      echo 'expose_php=Off'; \
+    } > /usr/local/etc/php/conf.d/zz-hardening.ini
+
+# the site pool (php_admin_* hardening — see pool.conf)
+COPY pool.conf /usr/local/etc/php-fpm.d/zz-@@SITE@@.conf
+# remove the stock pools so ONLY ours is active (the official image ships www.conf
+# AND zz-docker.conf — the latter re-declares [www] without a pm, which breaks FPM
+# init once www.conf is gone).
+RUN rm -f /usr/local/etc/php-fpm.d/www.conf \
+          /usr/local/etc/php-fpm.d/www.conf.default \
+          /usr/local/etc/php-fpm.d/zz-docker.conf \
+          /usr/local/etc/php-fpm.d/docker.conf 2>/dev/null || true
+
+# runtime identity: www-data already is 33:33; add the site runtime user
+# @@RUNTIME_USER@@ = @@RUNTIME_UID@@, primary group www-data(33) so it reads code
+# via the group and can write only the setgid 2770 dirs (never the code).
+RUN set -eux; \
+    useradd --uid @@RUNTIME_UID@@ --gid @@WEB_GID@@ --no-create-home --shell /usr/sbin/nologin @@RUNTIME_USER@@; \
+    mkdir -p /run/php; chown @@RUNTIME_UID@@:@@WEB_GID@@ /run/php
+
+# --- strip the attack surface: no shell, no fetch tools -------------------------
+# php-fpm runs as PID 1 in exec form and needs none of these at runtime.
+RUN rm -f /bin/sh /bin/bash /usr/bin/dash \
+          /usr/bin/wget /usr/bin/curl \
+          /usr/bin/apt /usr/bin/apt-get /usr/bin/dpkg 2>/dev/null || true
+
+USER @@RUNTIME_UID@@:@@WEB_GID@@
+EXPOSE 9000
+STOPSIGNAL SIGQUIT
+# exec form — no shell interpreter involved
+ENTRYPOINT ["php-fpm", "--nodaemonize", "--force-stderr"]

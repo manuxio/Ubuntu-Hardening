@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: @@SITE@@-init
+  namespace: @@NAMESPACE@@
+  labels: { app: @@SITE@@ }
+data:
+  init-perms.sh: |
+@@INIT_PERMS_INDENTED@@

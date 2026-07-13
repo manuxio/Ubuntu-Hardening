@@ -1,0 +1,30 @@
+#!/bin/sh
+# init-perms.sh — prepare the persistent volume for "@@SITE@@" with the web_user
+# permission model, ONCE, as root (init container / compose init service). After
+# this the app containers run rootless and shell-less. Idempotent: safe to re-run
+# (a bind-mount of already-correct host data is a no-op).
+set -eu
+
+ROOT="@@SITE_ROOT@@"
+DOC="@@DOCROOT@@"
+
+# ensure the tree exists (fresh PVC) — identical layout to the host
+mkdir -p "$DOC" "@@TMP_PATH@@" "@@SESSION_PATH@@" "@@LOG_PATH@@" @@WRITABLE_ABS_DIRS@@
+
+# a minimal landing page so the site answers before the real code is deployed
+[ -e "$DOC/index.php" ] || [ -e "$DOC/index.html" ] || \
+  printf '%s\n' '<?php header("Content-Type: text/plain"); echo "@@SITE@@: container up. Deploy your code into '"$DOC"'.\n";' > "$DOC/index.php"
+
+# CODE owned www-data:www-data, dirs 750 / files 640 (runtime reads via the group,
+# never writes) — configuration.php stays 640 (read-only to the runtime user).
+chown -R 33:33 "$ROOT"
+find "$DOC" -type d -exec chmod 750 {} +
+find "$DOC" -type f -exec chmod 640 {} + 2>/dev/null || true
+
+# WRITABLE dirs: setgid 2770 so new files inherit group www-data and both the
+# runtime user and the deploy identity can manage them.
+for d in @@WRITABLE_ABS_DIRS@@ "@@TMP_PATH@@" "@@SESSION_PATH@@" "@@LOG_PATH@@"; do
+  [ -d "$d" ] && { chgrp 33 "$d"; chmod 2770 "$d"; }
+done
+
+echo "init-perms: ok — $ROOT (code 750/640 www-data, writable dirs 2770 setgid)"
